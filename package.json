@@ -2,7 +2,8 @@
   "name": "rag-telegram-bot",
   "version": "1.0.0",
   "scripts": {
-    "start:all": "npm run pg:start && npm run start:parser && npm run test:db && npm run start:bot && npm run start:admin",
+    "start:all:old": "npm run pg:start && npm run start:parser && npm run test:db && npm run start:bot && npm run start:admin",
+    "start:all": "nodemon --watch src/data/raw --ext md,pdf --exec \"npm run start:all:old\"",
     "pg:start": "brew services start postgresql@14",
     "start:parser": "ts-node src/data/loadAll.ts",
     "test:db": "ts-node src/utils/testDb.ts",
@@ -14,6 +15,7 @@
     "dotenv": "^17.1.0",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.3.93",
+    "pg": "^8.16.3",
     "remark-parse": "^9.0.0",
     "remark-stringify": "^11.0.0",
     "strip-markdown": "^5.0.1",
@@ -23,6 +25,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.12",
+    "@types/pg": "^8.15.4",
+    "nodemon": "^3.1.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }

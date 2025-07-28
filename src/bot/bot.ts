@@ -35,7 +35,10 @@ export function startBot() {
   bot.on("text", async (ctx: Context) => {
     const msg = ctx.message;
     if (!msg || !("text" in msg)) {
-      await ctx.reply("Пожалуйста, отправьте текстовое сообщение.");
+      await ctx.reply("Пожалуйста, отправьте текстовое сообщение.", Markup.inlineKeyboard([
+        [Markup.button.callback("Задать вопрос", "ask_question")],
+        [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
+      ]));
       return;
     }
 
@@ -55,16 +58,39 @@ export function startBot() {
       } catch (e) {
         answer = "Ошибка генерации ответа ИИ.";
       }
-      await ctx.reply(answer); // Краткий ИИ-ответ
+      await ctx.reply(answer, Markup.inlineKeyboard([
+        [Markup.button.callback("Задать вопрос", "ask_question")],
+        [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
+      ])); // Краткий ИИ-ответ с меню
 
       // Затем отправляем цитаты с источниками
       const reply = results.map((r, i) =>
         `#${i+1}\n${r.content}\nИсточник: ${r.filename} (${r.source_ref})`
       ).join("\n\n");
-      await ctx.reply(reply); // Только цитаты
+      await ctx.reply(reply, Markup.inlineKeyboard([
+        [Markup.button.callback("Задать вопрос", "ask_question")],
+        [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
+      ])); // Только цитаты с меню
     } else {
-      await ctx.reply("Ответ не найден. [fallback]");
+      await ctx.reply("Ответ не найден. [fallback]", Markup.inlineKeyboard([
+        [Markup.button.callback("Задать вопрос", "ask_question")],
+        [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
+      ]));
     }
+  });
+
+  // Обработка нажатий на кнопки inline keyboard
+  bot.action("ask_question", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply("Пожалуйста, напишите свой вопрос текстом.", Markup.removeKeyboard());
+  });
+  bot.action("help", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply("ℹ️ Просто напишите свой вопрос, и я попробую найти ответ в инструкциях.");
+  });
+  bot.action("about", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply("🤖 Этот бот помогает сотрудникам быстро находить информацию в PDF и Markdown-инструкциях компании с помощью ИИ.");
   });
 
   bot.launch();

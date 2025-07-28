@@ -92,11 +92,11 @@ export function startAdminBot() {
       await ctx.reply("Документов пока нет.");
       return;
     }
-    const list = res.rows.map((doc, i) =>
+    const list = res.rows.map((doc: { id: number; original_name?: string; filename?: string; type: string; uploaded_at?: string | Date; uploader_id?: number; category?: string; }, i: number) =>
       `#${offset + i + 1}  ${doc.original_name || doc.filename}\n` +
       `Категория: ${doc.category || "—"}\n` +
       `Тип: ${doc.type}\n` +
-      `Загружен: ${new Date(doc.uploaded_at).toLocaleString()}\n` +
+      `Загружен: ${doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleString() : ""}\n` +
       `Uploader ID: ${doc.uploader_id}`
     ).join("\n\n");
     const buttons = [];
@@ -181,7 +181,7 @@ export function startAdminBot() {
         deleteStates.delete(ctx.from!.id);
         return;
       }
-      const list = res.rows.map((doc, i) =>
+      const list = res.rows.map((doc: { id: number; original_name?: string; filename?: string; type: string; uploaded_at?: string | Date; uploader_id?: number; category?: string; }, i: number) =>
         `#${i+1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}`
       ).join("\n\n");
       await ctx.reply(
@@ -210,7 +210,7 @@ export function startAdminBot() {
         categoryStates.set(ctx.from!.id, { step: "awaiting_create" });
         return;
       }
-      const list = res.rows.map((cat, i) => `#${i+1}  ${cat.name}`).join("\n");
+      const list = res.rows.map((cat: { id: number; name: string; }, i: number) => `#${i+1}  ${cat.name}`).join("\n");
       await ctx.reply(
         "Список категорий:\n" + list,
         Markup.keyboard([
@@ -243,7 +243,7 @@ export function startAdminBot() {
         await ctx.reply("Документов для перемещения нет.");
         return;
       }
-      const list = res.rows.map((doc, i) =>
+      const list = res.rows.map((doc: { id: number; original_name?: string; filename?: string; type: string; uploaded_at?: string | Date; uploader_id?: number; category?: string; }, i: number) =>
         `#${i+1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}`
       ).join("\n\n");
       await ctx.reply(
@@ -402,7 +402,7 @@ export function startAdminBot() {
           moveStates.delete(ctx.from!.id);
           return;
         }
-        const list = catRes.rows.map((cat, i) => `#${i+1}  ${cat.name}`).join("\n");
+        const list = catRes.rows.map((cat: { id: number; name: string; }, i: number) => `#${i+1}  ${cat.name}`).join("\n");
         await ctx.reply("Выберите номер новой категории для документа:\n" + list);
         moveStates.set(ctx.from!.id, { step: "awaiting_cat_number", docs, categories: catRes.rows, selectedDocId: doc.id });
         return;
@@ -458,7 +458,7 @@ export function startAdminBot() {
           categoryStates.delete(ctx.from!.id);
           return;
         }
-        const list = cats.map((cat, i) => `#${i+1}  ${cat.name}`).join("\n");
+        const list = cats.map((cat: { id: number; name: string; }, i: number) => `#${i+1}  ${cat.name}`).join("\n");
         await ctx.reply("Введите номер категории для удаления:\n" + list);
         categoryStates.set(ctx.from!.id, { step: "deleting", categories: cats });
         return;
@@ -492,7 +492,7 @@ export function startAdminBot() {
           categoryStates.delete(ctx.from!.id);
           return;
         }
-        const list = cats.map((cat, i) => `#${i+1}  ${cat.name}`).join("\n");
+        const list = cats.map((cat: { id: number; name: string; }, i: number) => `#${i+1}  ${cat.name}`).join("\n");
         await ctx.reply("Введите номер категории для переименования:\n" + list);
         categoryStates.set(ctx.from!.id, { step: "renaming", categories: cats });
         return;
@@ -586,8 +586,8 @@ async function showSearchPage(ctx: Context, query: string, page: number, total: 
     await ctx.reply("Ничего не найдено по вашему запросу.");
     return;
   }
-  const list = res.rows.map((doc, i) =>
-    `#${offset + i + 1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}\nЗагружен: ${new Date(doc.uploaded_at).toLocaleString()}\nUploader ID: ${doc.uploader_id}`
+  const list = res.rows.map((doc: { id: number; original_name?: string; filename?: string; type: string; uploaded_at?: string | Date; uploader_id?: number; category?: string; }, i: number) =>
+    `#${offset + i + 1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}\nЗагружен: ${doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleString() : ""}\nUploader ID: ${doc.uploader_id}`
   ).join("\n\n");
   const buttons = [];
   if (page > 0) buttons.push("⬅️ Назад");
