@@ -34,7 +34,7 @@ export async function searchInstructions(query: string) {
      FROM instruction_chunks
      WHERE embedding IS NOT NULL
      ORDER BY distance ASC
-     LIMIT 3;`,
+     LIMIT 10;`,
     [JSON.stringify(embedding)]
   );
 
@@ -62,9 +62,10 @@ export async function searchInstructions(query: string) {
 
 async function fallbackSearch(query: string) {
   const res = await pool.query(
-    `SELECT * FROM instruction_chunks WHERE content ILIKE $1;`,
+    `SELECT * FROM instruction_chunks WHERE content ILIKE $1 LIMIT 10;`,
     [`%${query}%`]
   );
+  
   const seen = new Set<string>();
   const unique = [];
   for (const chunk of res.rows) {
@@ -78,5 +79,6 @@ async function fallbackSearch(query: string) {
       if (unique.length >= 3) break;
     }
   }
+  
   return unique;
 }

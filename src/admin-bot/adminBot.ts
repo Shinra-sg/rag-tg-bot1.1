@@ -9,8 +9,124 @@ import adminIds from "./admin_ids.json";
 const token = process.env.ADMIN_BOT_TOKEN;
 if (!token) throw new Error("ADMIN_BOT_TOKEN is not defined in .env");
 
+// --- Функции для работы с админами в БД ---
+async function isAdminInDB(userId: number): Promise<boolean> {
+  try {
+    const res = await pool.query("SELECT id FROM admins WHERE user_id = $1", [userId]);
+    return res.rows.length > 0;
+  } catch (e) {
+    console.error("Ошибка проверки админа в БД:", e);
+    return false;
+  }
+}
+
+async function addAdminByUsername(username: string): Promise<{ success: boolean; message: string }> {
+  try {
+    // Проверяем, что username не пустой и начинается с @
+    const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
+    if (!cleanUsername) {
+      return { success: false, message: "Username не может быть пустым" };
+    }
+
+    // Проверяем, что админ с таким username уже не существует
+    const existingRes = await pool.query("SELECT id FROM admins WHERE username = $1", [cleanUsername]);
+    if (existingRes.rows.length > 0) {
+      return { success: false, message: `Админ с username @${cleanUsername} уже существует` };
+    }
+
+    // Добавляем нового админа (user_id будет null, пока пользователь не зайдет в бота)
+    await pool.query("INSERT INTO admins (username, user_id) VALUES ($1, $2)", [cleanUsername, null]);
+    return { success: true, message: `Админ @${cleanUsername} успешно добавлен` };
+  } catch (e) {
+    console.error("Ошибка добавления админа:", e);
+    return { success: false, message: "Ошибка при добавлении админа" };
+  }
+}
+
+async function removeAdminByUsername(username: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
+    if (!cleanUsername) {
+      return { success: false, message: "Username не может быть пустым" };
+    }
+
+    const res = await pool.query("DELETE FROM admins WHERE username = $1 RETURNING id", [cleanUsername]);
+    if (res.rows.length === 0) {
+      return { success: false, message: `Админ с username @${cleanUsername} не найден` };
+    }
+
+    return { success: true, message: `Админ @${cleanUsername} успешно удален` };
+  } catch (e) {
+    console.error("Ошибка удаления админа:", e);
+    return { success: false, message: "Ошибка при удалении админа" };
+  }
+}
+
+async function listAdmins(): Promise<{ success: boolean; admins: any[]; message?: string }> {
+  try {
+    const res = await pool.query("SELECT username, user_id, created_at FROM admins ORDER BY created_at DESC");
+    return { success: true, admins: res.rows };
+  } catch (e) {
+    console.error("Ошибка получения списка админов:", e);
+    return { success: false, admins: [], message: "Ошибка при получении списка админов" };
+  }
+}
+
+// Функция для проверки админа по username
+async function isAdminByUsername(username: string): Promise<boolean> {
+  try {
+    const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
+    const res = await pool.query("SELECT id FROM admins WHERE username = $1", [cleanUsername]);
+    return res.rows.length > 0;
+  } catch (e) {
+    console.error("Ошибка проверки админа по username:", e);
+    return false;
+  }
+}
+
+// Функция для обновления user_id когда пользователь заходит в бота
+async function updateAdminUserId(username: string, userId: number): Promise<void> {
+  try {
+    console.log(`🔄 Обновление user_id для @${username} на ${userId}`);
+    const result = await pool.query("UPDATE admins SET user_id = $1 WHERE username = $2 RETURNING id", [userId, username]);
+    if (result.rows.length > 0) {
+      console.log(`✅ user_id обновлен для @${username}`);
+    } else {
+      console.log(`⚠️ Админ @${username} не найден в базе данных`);
+    }
+  } catch (e) {
+    console.error("Ошибка обновления user_id админа:", e);
+  }
+}
+
 function isAdmin(ctx: Context) {
   return ctx.from && adminIds.includes(ctx.from.id);
+}
+
+// Новая функция проверки админа через БД
+async function isAdminFromDB(ctx: Context): Promise<boolean> {
+  if (!ctx.from) return false;
+  
+  console.log(`🔍 Проверка доступа для пользователя ID: ${ctx.from.id}, username: @${ctx.from.username || 'нет'}`);
+  
+  // Сначала проверяем старый способ (для обратной совместимости)
+  if (adminIds.includes(ctx.from.id)) {
+    console.log(`✅ Доступ разрешен через admin_ids.json`);
+    return true;
+  }
+  
+  // Затем проверяем через БД по user_id
+  const dbResult = await isAdminInDB(ctx.from.id);
+  console.log(`📊 Результат проверки в БД по user_id: ${dbResult ? '✅ Есть' : '❌ Нет'}`);
+  
+  // Если не найден по user_id, проверяем по username
+  if (!dbResult && ctx.from.username) {
+    const usernameResult = await isAdminByUsername(ctx.from.username);
+    console.log(`📊 Результат проверки в БД по username: ${usernameResult ? '✅ Есть' : '❌ Нет'}`);
+    return usernameResult;
+  }
+  
+  return dbResult;
 }
 
 const PAGE_SIZE = 10;
@@ -33,30 +149,132 @@ export function startAdminBot() {
   // --- Подтверждение удаления ---
   const confirmStates = new Map<number, { type: 'document' | 'category'; id: number; name: string }>();
 
+  // --- Состояния для управления админами ---
+  type AdminState = { step: string; action?: string };
+  const adminStates = new Map<number, AdminState>();
+
   const MAIN_MENU = Markup.keyboard([
     ["Загрузить документ", "Удалить документ", "Переместить документ"],
-    ["Категории", "Список документов", "Поиск документов"]
+    ["Категории", "Список документов", "Поиск документов"],
+    ["Управление админами"]
   ]).resize();
 
-  bot.start((ctx: Context) => {
-    if (!isAdmin(ctx)) {
+  const ADMIN_MENU = Markup.keyboard([
+    ["Добавить админа", "Удалить админа", "Список админов"],
+    ["Назад в главное меню"]
+  ]).resize();
+
+  bot.start(async (ctx: Context) => {
+    // Сначала обновляем user_id если пользователь админ по username
+    if (ctx.from?.username) {
+      await updateAdminUserId(ctx.from.username, ctx.from.id);
+    }
+    
+    // Теперь проверяем доступ
+    if (!(await isAdminFromDB(ctx))) {
       ctx.reply("⛔️ Доступ только для администраторов.");
       return;
     }
+    
     ctx.reply(
       "👋 Добро пожаловать в админ-бота!",
       MAIN_MENU
     );
   });
 
-  bot.hears(["/menu", "Меню"], (ctx: Context) => {
-    if (!isAdmin(ctx)) {
+  bot.hears(["/menu", "Меню"], async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) {
       ctx.reply("⛔️ Доступ только для администраторов.");
       return;
     }
     ctx.reply(
       "Выберите действие:",
       MAIN_MENU
+    );
+  });
+
+  // --- Управление админами ---
+  bot.hears("Управление админами", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    ctx.reply(
+      "🔧 Управление администраторами",
+      ADMIN_MENU
+    );
+  });
+
+  bot.hears("Назад в главное меню", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    ctx.reply(
+      "Выберите действие:",
+      MAIN_MENU
+    );
+  });
+
+  bot.hears("Добавить админа", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    adminStates.set(ctx.from!.id, { step: "adding_admin" });
+    await ctx.reply(
+      "Введите username нового админа (например: @username или username):",
+      Markup.keyboard([["Отмена"]]).oneTime().resize()
+    );
+  });
+
+  bot.hears("Удалить админа", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    const adminsResult = await listAdmins();
+    if (!adminsResult.success || adminsResult.admins.length === 0) {
+      await ctx.reply("Список админов пуст или произошла ошибка при получении списка.");
+      return;
+    }
+
+    const adminList = adminsResult.admins.map((admin, i) => 
+      `#${i+1} @${admin.username} (ID: ${admin.user_id || 'не заходил'})`
+    ).join("\n");
+    
+    adminStates.set(ctx.from!.id, { step: "removing_admin" });
+    await ctx.reply(
+      `Текущие админы:\n${adminList}\n\nВведите username админа для удаления:`,
+      Markup.keyboard([["Отмена"]]).oneTime().resize()
+    );
+  });
+
+  bot.hears("Список админов", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    const adminsResult = await listAdmins();
+    if (!adminsResult.success) {
+      await ctx.reply("Ошибка при получении списка админов.");
+      return;
+    }
+
+    if (adminsResult.admins.length === 0) {
+      await ctx.reply("Список админов пуст.");
+      return;
+    }
+
+    const adminList = adminsResult.admins.map((admin, i) => 
+      `#${i+1} @${admin.username}\n` +
+      `   ID: ${admin.user_id || 'не заходил в бота'}\n` +
+      `   Добавлен: ${new Date(admin.created_at).toLocaleString()}`
+    ).join("\n\n");
+
+    await ctx.reply(
+      `📋 Список администраторов:\n\n${adminList}`,
+      ADMIN_MENU
+    );
+  });
+
+  bot.hears("Отмена", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    adminStates.delete(ctx.from!.id);
+    await ctx.reply(
+      "Действие отменено.",
+      ADMIN_MENU
     );
   });
 
@@ -71,7 +289,7 @@ export function startAdminBot() {
 
   // Модификация списка документов с пагинацией
   bot.hears("Список документов", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     const page = 0;
     const res = await pool.query(`SELECT COUNT(*) FROM documents`);
     const total = parseInt(res.rows[0].count, 10);
@@ -107,7 +325,7 @@ export function startAdminBot() {
 
   // Модификация поиска с пагинацией
   bot.hears("Поиск документов", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     await ctx.reply("Введите поисковый запрос (название, категория или uploader_id):");
     searchStates.set(ctx.from!.id, { step: "awaiting_query" });
   });
@@ -116,13 +334,13 @@ export function startAdminBot() {
   const uploadStates = new Map<number, { step: string; filename?: string; filePath?: string }>();
 
   bot.hears("Загрузить документ", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     uploadStates.set(ctx.from!.id, { step: "awaiting_file" });
     await ctx.reply("Пожалуйста, отправьте PDF или Markdown файл.");
   });
 
   bot.on("document", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     if (!ctx.message || !('document' in ctx.message)) return;
     const state = uploadStates.get(ctx.from!.id);
     if (!state || state.step !== "awaiting_file") return;
@@ -161,7 +379,7 @@ export function startAdminBot() {
   const deleteStates = new Map<number, DeleteState>();
 
   bot.hears("Удалить документ", async (ctx: Context) => {
-    if (!isAdmin(ctx)) {
+    if (!(await isAdminFromDB(ctx))) {
       console.log("Не админ:", ctx.from?.id);
       return;
     }
@@ -202,7 +420,7 @@ export function startAdminBot() {
 
   // Обработчик для 'Категории' (множественное число)
   bot.hears("Категории", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     try {
       const res = await pool.query("SELECT id, name FROM categories ORDER BY name");
       if (res.rows.length === 0) {
@@ -230,7 +448,7 @@ export function startAdminBot() {
   const moveStates = new Map<number, MoveState>();
 
   bot.hears("Переместить документ", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     try {
       const res = await pool.query(`
         SELECT d.id, d.original_name, d.filename, d.type, c.name AS category
@@ -261,7 +479,7 @@ export function startAdminBot() {
   const searchStates = new Map<number, SearchState>();
 
   bot.on("text", async (ctx: Context) => {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminFromDB(ctx))) return;
     if (!ctx.message || !("text" in ctx.message)) return;
     const text = ctx.message.text.trim();
 
@@ -532,6 +750,52 @@ export function startAdminBot() {
       }
     }
 
+    // --- Управление админами ---
+    const adminState = adminStates.get(ctx.from!.id);
+    if (adminState) {
+      if (adminState.step === "adding_admin") {
+        const username = text;
+        if (username === "Отмена") {
+          adminStates.delete(ctx.from!.id);
+          await ctx.reply("Действие отменено.", ADMIN_MENU);
+          return;
+        }
+        const result = await addAdminByUsername(username);
+        if (result.success) {
+          await ctx.reply(result.message, ADMIN_MENU);
+          adminStates.delete(ctx.from!.id);
+        } else {
+          await ctx.reply(result.message, ADMIN_MENU);
+        }
+        return;
+      }
+      if (adminState.step === "removing_admin") {
+        const username = text;
+        if (username === "Отмена") {
+          adminStates.delete(ctx.from!.id);
+          await ctx.reply("Действие отменено.", ADMIN_MENU);
+          return;
+        }
+        const result = await removeAdminByUsername(username);
+        if (result.success) {
+          await ctx.reply(result.message, ADMIN_MENU);
+          adminStates.delete(ctx.from!.id);
+        } else {
+          await ctx.reply(result.message, ADMIN_MENU);
+        }
+        return;
+      }
+      // Если пользователь нажал "Назад в главное меню" — сбросить состояние
+      if (text === "Назад в главное меню") {
+        adminStates.delete(ctx.from!.id);
+        await ctx.reply(
+          "Выберите действие:",
+          MAIN_MENU
+        );
+        return;
+      }
+    }
+
     // --- Подтверждение удаления ---
     if (confirmStates.has(ctx.from!.id)) {
       if (text === "Да") {
@@ -560,8 +824,8 @@ export function startAdminBot() {
     }
 
     // Универсальный логгер для диагностики текстовых сообщений
-    bot.on("text", (ctx) => {
-      if (!isAdmin(ctx)) return;
+    bot.on("text", async (ctx) => {
+      if (!(await isAdminFromDB(ctx))) return;
       if (ctx.message && "text" in ctx.message) {
         console.log("Текстовое сообщение:", ctx.message.text);
       }

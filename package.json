@@ -4,12 +4,21 @@
   "scripts": {
     "start:all:old": "npm run pg:start && npm run start:parser && npm run test:db && npm run start:bot && npm run start:admin",
     "start:all": "nodemon --watch src/data/raw --ext md,pdf --exec \"npm run start:all:old\"",
+    "start:all:clean": "ts-node src/utils/startWithCleanup.ts",
     "pg:start": "brew services start postgresql@14",
     "start:parser": "ts-node src/data/loadAll.ts",
     "test:db": "ts-node src/utils/testDb.ts",
     "start:bot": "ts-node src/index.ts",
     "start": "ts-node src/index.ts",
-    "start:admin": "ts-node src/admin-bot/index.ts"
+    "start:admin": "ts-node src/admin-bot/index.ts",
+    "setup:admins": "ts-node src/utils/setupAdminsTable.ts",
+    "test:admins": "ts-node src/utils/testAdmins.ts",
+    "check:admins": "ts-node src/utils/checkAdmins.ts",
+    "test:admin-access": "ts-node src/utils/testAdminAccess.ts",
+    "check:search": "ts-node src/utils/checkSearchData.ts",
+    "check:duplicates": "ts-node src/utils/checkDuplicates.ts",
+    "clean:duplicates": "ts-node src/utils/cleanDuplicates.ts",
+    "stop:all": "ts-node src/utils/stopAll.ts"
   },
   "dependencies": {
     "dotenv": "^17.1.0",
