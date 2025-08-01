@@ -13,7 +13,7 @@ for launch embedding {python3 generate_embeddings.py}
 
 launch all {npm run start:all}
 
-launch all with cleanup {npm run start:all:clean}
+!launch all with cleanup {npm run start:all:clean}!
 
 stop all {npm run stop:all}
 

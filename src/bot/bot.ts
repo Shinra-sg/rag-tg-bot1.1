@@ -1,12 +1,23 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { searchInstructions } from "../utils/search";
 import { askLLM } from "../utils/generateAnswer";
+import { formatSearchResults, formatSummary } from "../utils/formatSources";
+import { formatSearchResultsPlain, formatSummaryPlain } from "../utils/formatSourcesPlain";
 
 export function startBot() {
   const token = process.env.BOT_TOKEN;
   if (!token) throw new Error("BOT_TOKEN is not defined in .env");
 
   const bot = new Telegraf(token);
+  
+  // Хранилище результатов поиска для каждого пользователя
+  const userSearchResults = new Map<number, any[]>();
+  
+  // Функция для логирования действий
+  function logAction(action: string, userId?: number, details?: any) {
+    console.log(`[${new Date().toISOString()}] Action: ${action}, User: ${userId}, Details:`, details);
+  }
+  
   // --- Весь код, связанный с удалением сообщений, закомментирован ---
   // const lastBotMessages = new Map<number, number[]>();
   // async function deleteLastBotMessages(ctx: Context) {
@@ -82,6 +93,8 @@ export function startBot() {
 
   bot.on("text", async (ctx: Context) => {
     const userId = ctx.from?.id;
+    const messageText = ctx.message && "text" in ctx.message ? ctx.message.text : "";
+    logAction("text_message", userId, { text: messageText.substring(0, 50) + "..." });
     // Удаляем старые сообщения бота для этого пользователя
     if (userId) {
       // if (lastBotMessages.has(userId)) {
@@ -122,8 +135,27 @@ export function startBot() {
         answer = "Ошибка генерации ответа ИИ.";
       }
       const sentMessages: number[] = [];
+      
+      // Сохраняем результаты поиска для пользователя
+      if (userId) {
+        userSearchResults.set(userId, results);
+      }
+      
+      // Показываем краткую сводку источников
+      let summaryMsg;
+      try {
+        const summary = formatSummary(results);
+        summaryMsg = await ctx.reply(summary, { parse_mode: 'Markdown' });
+      } catch (error) {
+        console.log("Markdown parsing error in summary, using plain format:", error);
+        const summary = formatSummaryPlain(results);
+        summaryMsg = await ctx.reply(summary);
+      }
+      sentMessages.push(summaryMsg.message_id);
+      
       const msg1 = await ctx.reply(answer, Markup.inlineKeyboard([
         [Markup.button.callback("Задать вопрос", "ask_question")],
+        [Markup.button.callback("Показать источники", "show_sources")],
         [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")],
         ...results.map((r, i) => [Markup.button.callback(`Скачать файл #${i+1}`, `download_${encodeURIComponent(r.filename)}`)])
       ]));
@@ -151,16 +183,16 @@ export function startBot() {
         const path = require("path");
         const fs = require("fs");
         const filePath = path.join(__dirname, "../data/raw", r.filename);
-        if (!fs.existsSync(filePath)) return `#${i+1}\n*${r.content.trim().split(/[.!?]/)[0]}*\nИсточник: ${r.filename} (${r.source_ref})`;
+        if (!fs.existsSync(filePath)) return `**#${i+1}**\n*${r.content.trim().split(/[.!?]/)[0]}*\n\n📄 **Источник:** ${r.filename} (${r.source_ref})`;
         let fullText = "";
         try {
           fullText = fs.readFileSync(filePath, "utf-8");
         } catch {
-          return `#${i+1}\n*${r.content.trim().split(/[.!?]/)[0]}*\nИсточник: ${r.filename} (${r.source_ref})`;
+          return `**#${i+1}**\n*${r.content.trim().split(/[.!?]/)[0]}*\n\n📄 **Источник:** ${r.filename} (${r.source_ref})`;
         }
         const sentences: string[] = fullText.match(/[^.!?\n]+[.!?\n]+/g) || [fullText];
         let idx = sentences.findIndex((s: string) => s.includes(r.content.trim().slice(0, 10)));
-        if (idx === -1) return `#${i+1}\n*${r.content.trim().split(/[.!?]/)[0]}*\nИсточник: ${r.filename} (${r.source_ref})`;
+        if (idx === -1) return `**#${i+1}**\n*${r.content.trim().split(/[.!?]/)[0]}*\n\n📄 **Источник:** ${r.filename} (${r.source_ref})`;
         const before = idx > 0 ? sentences[idx-1].trim() : "";
         const after = idx < sentences.length-1 ? sentences[idx+1].trim() : "";
         const keyPhrase = r.content.trim().split(/[.!?]/)[0];
@@ -175,12 +207,9 @@ export function startBot() {
             contextText = "_Фрагмент не найден_";
           }
         }
-        return `#${i+1}\n${contextText}\nИсточник: ${r.filename} (${r.source_ref})`;
+        return `**#${i+1}**\n${contextText}\n\n📕 **Источник:** ${r.filename} (${r.source_ref})`;
       }));
-      const reply = results.map((r, i) =>
-        `#${i+1}\n${r.content}\nИсточник: ${r.filename} (${r.source_ref})`
-      ).join("\n\n");
-      await ctx.reply(reply); // Просто текст, без Markdown
+      // Полные источники теперь показываются по кнопке "Показать источники"
       // --- Конец изменений ---
       if (userId) {
         // lastBotMessages.set(userId, sentMessages);
@@ -195,30 +224,90 @@ export function startBot() {
 
   // Обработка нажатий на кнопки inline keyboard
   bot.action("ask_question", async (ctx) => {
-    // await deleteLastBotMessages(ctx);
-    await ctx.answerCbQuery();
-    const msg = await ctx.reply("Пожалуйста, напишите свой вопрос текстом.", Markup.removeKeyboard());
-    const userId = ctx.from?.id;
-    if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+    try {
+      logAction("ask_question", ctx.from?.id);
+      // await deleteLastBotMessages(ctx);
+      await ctx.answerCbQuery();
+      const msg = await ctx.reply("Пожалуйста, напишите свой вопрос текстом.", Markup.removeKeyboard());
+      const userId = ctx.from?.id;
+      if (userId) {
+        // lastBotMessages.set(userId, [msg.message_id]);
+      }
+    } catch (error) {
+      console.error("Error in ask_question handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при обработке запроса");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
     }
   });
   bot.action("help", async (ctx) => {
-    // await deleteLastBotMessages(ctx);
-    await ctx.answerCbQuery();
-    const msg = await ctx.reply("ℹ️ Просто напишите свой вопрос, и я попробую найти ответ в инструкциях.");
-    const userId = ctx.from?.id;
-    if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+    try {
+      // await deleteLastBotMessages(ctx);
+      await ctx.answerCbQuery();
+      const msg = await ctx.reply("ℹ️ Просто напишите свой вопрос, и я попробую найти ответ в инструкциях.");
+      const userId = ctx.from?.id;
+      if (userId) {
+        // lastBotMessages.set(userId, [msg.message_id]);
+      }
+    } catch (error) {
+      console.error("Error in help handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при показе справки");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
     }
   });
   bot.action("about", async (ctx) => {
-    // await deleteLastBotMessages(ctx);
-    await ctx.answerCbQuery();
-    const msg = await ctx.reply("🤖 Этот бот помогает сотрудникам быстро находить информацию в PDF и Markdown-инструкциях компании с помощью ИИ.");
-    const userId = ctx.from?.id;
-    if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+    try {
+      // await deleteLastBotMessages(ctx);
+      await ctx.answerCbQuery();
+      const msg = await ctx.reply("🤖 Этот бот помогает сотрудникам быстро находить информацию в PDF и Markdown-инструкциях компании с помощью ИИ.");
+      const userId = ctx.from?.id;
+      if (userId) {
+        // lastBotMessages.set(userId, [msg.message_id]);
+      }
+    } catch (error) {
+      console.error("Error in about handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при показе информации");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
+    }
+  });
+  
+  bot.action("show_sources", async (ctx) => {
+    try {
+      logAction("show_sources", ctx.from?.id);
+      await ctx.answerCbQuery();
+      const userId = ctx.from?.id;
+      
+      if (userId && userSearchResults.has(userId)) {
+        const results = userSearchResults.get(userId)!;
+        
+        try {
+          // Пробуем с Markdown
+          const formattedSources = formatSearchResults(results);
+          await ctx.reply(formattedSources, { parse_mode: 'Markdown' });
+        } catch (error) {
+          // Если ошибка - используем plain версию
+          console.log("Markdown parsing error, using plain format:", error);
+          const formattedSources = formatSearchResultsPlain(results);
+          await ctx.reply(formattedSources);
+        }
+      } else {
+        await ctx.reply("❌ Нет сохраненных результатов поиска. Выполните поиск заново.");
+      }
+    } catch (error) {
+      console.error("Error in show_sources handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Произошла ошибка при показе источников");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
     }
   });
 
@@ -226,23 +315,33 @@ export function startBot() {
   const path = require("path");
   const fs = require("fs");
   bot.action(/download_(.+)/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const filename = decodeURIComponent(ctx.match[1]);
-    const filePath = path.join(__dirname, "../data/raw", filename);
-    const userId = ctx.from?.id;
-    if (fs.existsSync(filePath)) {
-      const docMsg = await ctx.replyWithDocument({ source: filePath, filename });
-      if (userId) {
-        // const arr = lastBotMessages.get(userId) || [];
-        // arr.push(docMsg.message_id);
-        // lastBotMessages.set(userId, arr);
+    try {
+      await ctx.answerCbQuery();
+      const filename = decodeURIComponent(ctx.match[1]);
+      const filePath = path.join(__dirname, "../data/raw", filename);
+      const userId = ctx.from?.id;
+      
+      if (fs.existsSync(filePath)) {
+        const docMsg = await ctx.replyWithDocument({ source: filePath, filename });
+        if (userId) {
+          // const arr = lastBotMessages.get(userId) || [];
+          // arr.push(docMsg.message_id);
+          // lastBotMessages.set(userId, arr);
+        }
+      } else {
+        const errMsg = await ctx.reply("❌ Файл не найден на сервере.");
+        if (userId) {
+          // const arr = lastBotMessages.get(userId) || [];
+          // arr.push(errMsg.message_id);
+          // lastBotMessages.set(userId, arr);
+        }
       }
-    } else {
-      const errMsg = await ctx.reply("Файл не найден на сервере.");
-      if (userId) {
-        // const arr = lastBotMessages.get(userId) || [];
-        // arr.push(errMsg.message_id);
-        // lastBotMessages.set(userId, arr);
+    } catch (error) {
+      console.error("Error in download handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при скачивании файла");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
       }
     }
   });
