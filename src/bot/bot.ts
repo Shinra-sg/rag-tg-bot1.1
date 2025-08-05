@@ -1,5 +1,6 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { searchInstructions } from "../utils/search";
+import { searchInstructionsWithAccess, hasAnyAccess } from "../utils/searchWithAccess";
 import { askLLM } from "../utils/generateAnswer";
 import { formatSearchResults, formatSummary } from "../utils/formatSources";
 import { formatSearchResultsPlain, formatSummaryPlain } from "../utils/formatSourcesPlain";
@@ -13,27 +14,35 @@ export function startBot() {
   // Хранилище результатов поиска для каждого пользователя
   const userSearchResults = new Map<number, any[]>();
   
+  // Хранилище ID последних сообщений бота для каждого пользователя
+  const lastBotMessages = new Map<number, number[]>();
+  
   // Функция для логирования действий
   function logAction(action: string, userId?: number, details?: any) {
     console.log(`[${new Date().toISOString()}] Action: ${action}, User: ${userId}, Details:`, details);
   }
   
-  // --- Весь код, связанный с удалением сообщений, закомментирован ---
-  // const lastBotMessages = new Map<number, number[]>();
-  // async function deleteLastBotMessages(ctx: Context) {
-  //   const userId = ctx.from?.id;
-  //   if (userId && lastBotMessages.has(userId)) {
-  //     for (const msgId of lastBotMessages.get(userId)!) {
-  //       try {
-  //         await ctx.telegram.deleteMessage(ctx.chat!.id, msgId);
-  //       } catch (e) {}
-  //     }
-  //     lastBotMessages.delete(userId);
-  //   }
-  // }
+  // Функция для удаления предыдущих сообщений бота
+  async function deleteLastBotMessages(ctx: Context) {
+    const userId = ctx.from?.id;
+    if (userId && lastBotMessages.has(userId)) {
+      const messagesToDelete = lastBotMessages.get(userId)!;
+      console.log(`[${new Date().toISOString()}] Deleting ${messagesToDelete.length} messages for user ${userId}`);
+      
+      for (const msgId of messagesToDelete) {
+        try {
+          await ctx.telegram.deleteMessage(ctx.chat!.id, msgId);
+          console.log(`[${new Date().toISOString()}] Successfully deleted message ${msgId} for user ${userId}`);
+        } catch (e) {
+          console.log(`[${new Date().toISOString()}] Failed to delete message ${msgId} for user ${userId}:`, e);
+        }
+      }
+      lastBotMessages.delete(userId);
+    }
+  }
 
   bot.start(async (ctx: Context) => {
-    // await deleteLastBotMessages(ctx);
+    await deleteLastBotMessages(ctx);
     const msg = await ctx.reply(
       "Привет! Я помогу найти нужную инструкцию.",
       Markup.keyboard([
@@ -43,51 +52,51 @@ export function startBot() {
     );
     const userId = ctx.from?.id;
     if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+      lastBotMessages.set(userId, [msg.message_id]);
     }
   });
 
   bot.hears("Помощь", async (ctx: Context) => {
-    // await deleteLastBotMessages(ctx);
+    await deleteLastBotMessages(ctx);
     const msg = await ctx.reply(
       "ℹ️ Просто напишите свой вопрос, и я попробую найти ответ в инструкциях. Если не получится — напишите в поддержку."
     );
     const userId = ctx.from?.id;
     if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+      lastBotMessages.set(userId, [msg.message_id]);
     }
   });
 
   bot.hears("О проекте", async (ctx: Context) => {
-    // await deleteLastBotMessages(ctx);
+    await deleteLastBotMessages(ctx);
     const msg = await ctx.reply(
       "🤖 Этот бот помогает сотрудникам быстро находить информацию в PDF и Markdown-инструкциях компании с помощью ИИ."
     );
     const userId = ctx.from?.id;
     if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+      lastBotMessages.set(userId, [msg.message_id]);
     }
   });
 
   bot.hears("Задать вопрос", async (ctx: Context) => {
-    // await deleteLastBotMessages(ctx);
+    await deleteLastBotMessages(ctx);
     const msg = await ctx.reply(
       "Пожалуйста, напишите свой вопрос текстом."
     );
     const userId = ctx.from?.id;
     if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+      lastBotMessages.set(userId, [msg.message_id]);
     }
   });
 
   bot.command("help", async (ctx: Context) => {
-    // await deleteLastBotMessages(ctx);
+    await deleteLastBotMessages(ctx);
     const msg = await ctx.reply(
       "ℹ️ Просто напишите свой вопрос, и я попробую найти ответ в инструкциях."
     );
     const userId = ctx.from?.id;
     if (userId) {
-      // lastBotMessages.set(userId, [msg.message_id]);
+      lastBotMessages.set(userId, [msg.message_id]);
     }
   });
 
@@ -97,31 +106,61 @@ export function startBot() {
     logAction("text_message", userId, { text: messageText.substring(0, 50) + "..." });
     // Удаляем старые сообщения бота для этого пользователя
     if (userId) {
-      // if (lastBotMessages.has(userId)) {
-      //   for (const msgId of lastBotMessages.get(userId)!) {
-      //     try {
-      //       await ctx.telegram.deleteMessage(ctx.chat!.id, msgId);
-      //     } catch (e) {
-      //       // Сообщение уже удалено или не найдено — игнорируем ошибку
-      //     }
-      //   }
-      //   lastBotMessages.delete(userId);
-      // }
+      if (lastBotMessages.has(userId)) {
+        console.log(`[${new Date().toISOString()}] Deleting previous bot messages for user ${userId} before processing new query`);
+        for (const msgId of lastBotMessages.get(userId)!) {
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat!.id, msgId);
+          } catch (e) {
+            // Сообщение уже удалено или не найдено — игнорируем ошибку
+            console.log(`[${new Date().toISOString()}] Message ${msgId} already deleted or not found for user ${userId}`);
+          }
+        }
+        lastBotMessages.delete(userId);
+      }
     }
 
     const msg = ctx.message;
     if (!msg || !("text" in msg)) {
-      await ctx.reply("Пожалуйста, отправьте текстовое сообщение.", Markup.inlineKeyboard([
+      const errorMsg = await ctx.reply("Пожалуйста, отправьте текстовое сообщение.", Markup.inlineKeyboard([
         [Markup.button.callback("Задать вопрос", "ask_question")],
         [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
       ]));
+      if (userId) {
+        lastBotMessages.set(userId, [errorMsg.message_id]);
+      }
       return;
     }
 
     const text = msg.text;
-    await ctx.reply(`🔍 Обрабатываю запрос: "${text}"`, Markup.removeKeyboard());
+    const processingMsg = await ctx.reply(`🔍 Обрабатываю запрос: "${text}"`, Markup.removeKeyboard());
+    const processingMsgId = processingMsg.message_id;
 
-    const results = await searchInstructions(text);
+    // Проверяем доступ пользователя к документам
+    const username = ctx.from?.username;
+    let results;
+    
+    if (username) {
+      // Проверяем, есть ли у пользователя доступ к любым документам
+      const hasAccess = await hasAnyAccess(username);
+      if (!hasAccess) {
+        await ctx.reply("🔒 У вас нет доступа к документам. Обратитесь к администратору для получения доступа.", 
+          Markup.inlineKeyboard([
+            [Markup.button.callback("Задать вопрос", "ask_question")],
+            [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
+          ]));
+        if (userId) {
+          lastBotMessages.set(userId, [processingMsgId]);
+        }
+        return;
+      }
+      
+      // Используем поиск с проверкой доступа
+      results = await searchInstructionsWithAccess(text, username);
+    } else {
+      // Если username не указан, используем обычный поиск (для обратной совместимости)
+      results = await searchInstructions(text);
+    }
     if (results && results.length > 0) {
       // Формируем контекст для Ollama
       const context = results.map((r, i) => `Фрагмент #${i+1}: ${r.content}`).join("\n\n");
@@ -134,7 +173,7 @@ export function startBot() {
       } catch (e) {
         answer = "Ошибка генерации ответа ИИ.";
       }
-      const sentMessages: number[] = [];
+      const sentMessages: number[] = [processingMsgId];
       
       // Сохраняем результаты поиска для пользователя
       if (userId) {
@@ -212,13 +251,16 @@ export function startBot() {
       // Полные источники теперь показываются по кнопке "Показать источники"
       // --- Конец изменений ---
       if (userId) {
-        // lastBotMessages.set(userId, sentMessages);
+        lastBotMessages.set(userId, sentMessages);
       }
     } else {
-      await ctx.reply("Ответ не найден. [fallback]", Markup.inlineKeyboard([
+      const fallbackMsg = await ctx.reply("Ответ не найден. [fallback]", Markup.inlineKeyboard([
         [Markup.button.callback("Задать вопрос", "ask_question")],
         [Markup.button.callback("Помощь", "help"), Markup.button.callback("О проекте", "about")]
       ]));
+      if (userId) {
+        lastBotMessages.set(userId, [fallbackMsg.message_id]);
+      }
     }
   });
 
@@ -226,12 +268,12 @@ export function startBot() {
   bot.action("ask_question", async (ctx) => {
     try {
       logAction("ask_question", ctx.from?.id);
-      // await deleteLastBotMessages(ctx);
+      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const msg = await ctx.reply("Пожалуйста, напишите свой вопрос текстом.", Markup.removeKeyboard());
       const userId = ctx.from?.id;
       if (userId) {
-        // lastBotMessages.set(userId, [msg.message_id]);
+        lastBotMessages.set(userId, [msg.message_id]);
       }
     } catch (error) {
       console.error("Error in ask_question handler:", error);
@@ -244,12 +286,12 @@ export function startBot() {
   });
   bot.action("help", async (ctx) => {
     try {
-      // await deleteLastBotMessages(ctx);
+      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const msg = await ctx.reply("ℹ️ Просто напишите свой вопрос, и я попробую найти ответ в инструкциях.");
       const userId = ctx.from?.id;
       if (userId) {
-        // lastBotMessages.set(userId, [msg.message_id]);
+        lastBotMessages.set(userId, [msg.message_id]);
       }
     } catch (error) {
       console.error("Error in help handler:", error);
@@ -262,12 +304,12 @@ export function startBot() {
   });
   bot.action("about", async (ctx) => {
     try {
-      // await deleteLastBotMessages(ctx);
+      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const msg = await ctx.reply("🤖 Этот бот помогает сотрудникам быстро находить информацию в PDF и Markdown-инструкциях компании с помощью ИИ.");
       const userId = ctx.from?.id;
       if (userId) {
-        // lastBotMessages.set(userId, [msg.message_id]);
+        lastBotMessages.set(userId, [msg.message_id]);
       }
     } catch (error) {
       console.error("Error in about handler:", error);
@@ -291,15 +333,30 @@ export function startBot() {
         try {
           // Пробуем с Markdown
           const formattedSources = formatSearchResults(results);
-          await ctx.reply(formattedSources, { parse_mode: 'Markdown' });
+          const sourcesMsg = await ctx.reply(formattedSources, { parse_mode: 'Markdown' });
+          if (userId) {
+            const arr = lastBotMessages.get(userId) || [];
+            arr.push(sourcesMsg.message_id);
+            lastBotMessages.set(userId, arr);
+          }
         } catch (error) {
           // Если ошибка - используем plain версию
           console.log("Markdown parsing error, using plain format:", error);
           const formattedSources = formatSearchResultsPlain(results);
-          await ctx.reply(formattedSources);
+          const sourcesMsg = await ctx.reply(formattedSources);
+          if (userId) {
+            const arr = lastBotMessages.get(userId) || [];
+            arr.push(sourcesMsg.message_id);
+            lastBotMessages.set(userId, arr);
+          }
         }
       } else {
-        await ctx.reply("❌ Нет сохраненных результатов поиска. Выполните поиск заново.");
+        const errorMsg = await ctx.reply("❌ Нет сохраненных результатов поиска. Выполните поиск заново.");
+        if (userId) {
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(errorMsg.message_id);
+          lastBotMessages.set(userId, arr);
+        }
       }
     } catch (error) {
       console.error("Error in show_sources handler:", error);
@@ -324,16 +381,16 @@ export function startBot() {
       if (fs.existsSync(filePath)) {
         const docMsg = await ctx.replyWithDocument({ source: filePath, filename });
         if (userId) {
-          // const arr = lastBotMessages.get(userId) || [];
-          // arr.push(docMsg.message_id);
-          // lastBotMessages.set(userId, arr);
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(docMsg.message_id);
+          lastBotMessages.set(userId, arr);
         }
       } else {
         const errMsg = await ctx.reply("❌ Файл не найден на сервере.");
         if (userId) {
-          // const arr = lastBotMessages.get(userId) || [];
-          // arr.push(errMsg.message_id);
-          // lastBotMessages.set(userId, arr);
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(errMsg.message_id);
+          lastBotMessages.set(userId, arr);
         }
       }
     } catch (error) {

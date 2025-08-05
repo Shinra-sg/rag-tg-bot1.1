@@ -18,7 +18,9 @@
     "check:search": "ts-node src/utils/checkSearchData.ts",
     "check:duplicates": "ts-node src/utils/checkDuplicates.ts",
     "clean:duplicates": "ts-node src/utils/cleanDuplicates.ts",
-    "stop:all": "ts-node src/utils/stopAll.ts"
+    "stop:all": "ts-node src/utils/stopAll.ts",
+    "setup:access": "ts-node src/utils/setupDocumentAccess.ts",
+    "test:access": "ts-node src/utils/testDocumentAccess.ts"
   },
   "dependencies": {
     "dotenv": "^17.1.0",

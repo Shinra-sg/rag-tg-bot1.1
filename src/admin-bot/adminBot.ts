@@ -5,6 +5,14 @@ import path from "path";
 import fs from "fs";
 import pool from "../utils/db";
 import adminIds from "./admin_ids.json";
+import { 
+  grantDocumentAccess, 
+  revokeDocumentAccess, 
+  getDocumentAccessList, 
+  getAccessStatistics,
+  getUserAccessibleDocuments,
+  getUserInaccessibleDocuments
+} from "../utils/documentAccess";
 
 const token = process.env.ADMIN_BOT_TOKEN;
 if (!token) throw new Error("ADMIN_BOT_TOKEN is not defined in .env");
@@ -153,15 +161,31 @@ export function startAdminBot() {
   type AdminState = { step: string; action?: string };
   const adminStates = new Map<number, AdminState>();
 
+  // --- Состояния для управления доступом ---
+  type AccessState = { 
+    step: string; 
+    action?: string; 
+    documents?: any[]; 
+    selectedDocId?: number; 
+    accessList?: any[];
+    selectedAccessId?: number;
+  };
+  const accessStates = new Map<number, AccessState>();
+
   const MAIN_MENU = Markup.keyboard([
     ["Загрузить документ", "Удалить документ", "Переместить документ"],
     ["Категории", "Список документов", "Поиск документов"],
-    ["Управление админами"]
+    ["Управление админами", "Управление доступом"]
   ]).resize();
 
   const ADMIN_MENU = Markup.keyboard([
     ["Добавить админа", "Удалить админа", "Список админов"],
     ["Назад в главное меню"]
+  ]).resize();
+
+  const ACCESS_MENU = Markup.keyboard([
+    ["Предоставить доступ", "Отозвать доступ", "Список доступа"],
+    ["Статистика доступа", "Назад в главное меню"]
   ]).resize();
 
   bot.start(async (ctx: Context) => {
@@ -210,6 +234,133 @@ export function startAdminBot() {
       "Выберите действие:",
       MAIN_MENU
     );
+  });
+
+  // --- Управление доступом к документам ---
+  bot.hears("Управление доступом", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    ctx.reply(
+      "🔐 Управление доступом к документам",
+      ACCESS_MENU
+    );
+  });
+
+  bot.hears("Предоставить доступ", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    try {
+      const res = await pool.query(`
+        SELECT d.id, d.original_name, d.filename, d.type, c.name AS category
+        FROM documents d
+        LEFT JOIN categories c ON d.category_id = c.id
+        ORDER BY d.uploaded_at DESC
+        LIMIT 20
+      `);
+      
+      if (res.rows.length === 0) {
+        await ctx.reply("Документов для предоставления доступа нет.");
+        return;
+      }
+      
+      const list = res.rows.map((doc: any, i: number) =>
+        `#${i+1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}`
+      ).join("\n\n");
+      
+      await ctx.reply(
+        "Выберите номер документа для предоставления доступа:\n\n" + list
+      );
+      accessStates.set(ctx.from!.id, { step: "selecting_document", documents: res.rows });
+    } catch (e) {
+      console.error("Ошибка при получении списка документов:", e);
+      await ctx.reply("Ошибка при получении списка документов.");
+    }
+  });
+
+  bot.hears("Отозвать доступ", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    try {
+      const res = await pool.query(`
+        SELECT d.id, d.original_name, d.filename, d.type, c.name AS category
+        FROM documents d
+        LEFT JOIN categories c ON d.category_id = c.id
+        WHERE EXISTS (SELECT 1 FROM document_access WHERE document_id = d.id AND is_active = TRUE)
+        ORDER BY d.uploaded_at DESC
+        LIMIT 20
+      `);
+      
+      if (res.rows.length === 0) {
+        await ctx.reply("Нет документов с предоставленным доступом.");
+        return;
+      }
+      
+      const list = res.rows.map((doc: any, i: number) =>
+        `#${i+1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}`
+      ).join("\n\n");
+      
+      await ctx.reply(
+        "Выберите номер документа для отзыва доступа:\n\n" + list
+      );
+      accessStates.set(ctx.from!.id, { step: "selecting_document_for_revoke", documents: res.rows });
+    } catch (e) {
+      console.error("Ошибка при получении списка документов:", e);
+      await ctx.reply("Ошибка при получении списка документов.");
+    }
+  });
+
+  bot.hears("Список доступа", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    try {
+      const res = await pool.query(`
+        SELECT d.id, d.original_name, d.filename, d.type, c.name AS category
+        FROM documents d
+        LEFT JOIN categories c ON d.category_id = c.id
+        WHERE EXISTS (SELECT 1 FROM document_access WHERE document_id = d.id AND is_active = TRUE)
+        ORDER BY d.uploaded_at DESC
+        LIMIT 20
+      `);
+      
+      if (res.rows.length === 0) {
+        await ctx.reply("Нет документов с предоставленным доступом.");
+        return;
+      }
+      
+      const list = res.rows.map((doc: any, i: number) =>
+        `#${i+1}  ${doc.original_name || doc.filename}\nКатегория: ${doc.category || "—"}\nТип: ${doc.type}`
+      ).join("\n\n");
+      
+      await ctx.reply(
+        "Выберите номер документа для просмотра списка доступа:\n\n" + list
+      );
+      accessStates.set(ctx.from!.id, { step: "selecting_document_for_list", documents: res.rows });
+    } catch (e) {
+      console.error("Ошибка при получении списка документов:", e);
+      await ctx.reply("Ошибка при получении списка документов.");
+    }
+  });
+
+  bot.hears("Статистика доступа", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    try {
+      const stats = await getAccessStatistics();
+      if (stats.success) {
+        const message = `📊 Статистика доступа к документам:\n\n` +
+          `📄 Всего документов: ${stats.stats.totalDocuments}\n` +
+          `🔑 Всего предоставленных доступов: ${stats.stats.totalAccessGrants}\n` +
+          `👥 Уникальных пользователей с доступом: ${stats.stats.uniqueUsersWithAccess}\n` +
+          `🆕 Доступов за последние 7 дней: ${stats.stats.recentAccessGrants}`;
+        
+        await ctx.reply(message, ACCESS_MENU);
+      } else {
+        await ctx.reply("Ошибка при получении статистики.", ACCESS_MENU);
+      }
+    } catch (e) {
+      console.error("Ошибка при получении статистики:", e);
+      await ctx.reply("Ошибка при получении статистики.", ACCESS_MENU);
+    }
   });
 
   bot.hears("Добавить админа", async (ctx: Context) => {
@@ -788,6 +939,149 @@ export function startAdminBot() {
       // Если пользователь нажал "Назад в главное меню" — сбросить состояние
       if (text === "Назад в главное меню") {
         adminStates.delete(ctx.from!.id);
+        await ctx.reply(
+          "Выберите действие:",
+          MAIN_MENU
+        );
+        return;
+      }
+    }
+
+    // --- Управление доступом к документам ---
+    const accessState = accessStates.get(ctx.from!.id);
+    if (accessState) {
+      // Выбор документа для предоставления доступа
+      if (accessState.step === "selecting_document" && accessState.documents) {
+        const num = parseInt(text, 10);
+        const docs = accessState.documents;
+        if (!num || num < 1 || num > docs.length) {
+          await ctx.reply("Некорректный номер. Пожалуйста, отправьте число из списка.");
+          return;
+        }
+        const doc = docs[num - 1];
+        await ctx.reply(
+          `Введите username пользователя для предоставления доступа к документу '${doc.original_name || doc.filename}':\n\nПример: @username или username`,
+          Markup.keyboard([["Отмена"]]).oneTime().resize()
+        );
+        accessStates.set(ctx.from!.id, { step: "awaiting_username", documents: docs, selectedDocId: doc.id });
+        return;
+      }
+
+      // Ввод username для предоставления доступа
+      if (accessState.step === "awaiting_username" && accessState.selectedDocId) {
+        const username = text;
+        if (username === "Отмена") {
+          accessStates.delete(ctx.from!.id);
+          await ctx.reply("Действие отменено.", ACCESS_MENU);
+          return;
+        }
+        
+        const result = await grantDocumentAccess(accessState.selectedDocId, username, ctx.from!.id);
+        if (result.success) {
+          await ctx.reply(result.message, ACCESS_MENU);
+          await logAdminAction(ctx, "grant_access", "document", accessState.selectedDocId, null, `username: ${username}`);
+        } else {
+          await ctx.reply(result.message, ACCESS_MENU);
+        }
+        accessStates.delete(ctx.from!.id);
+        return;
+      }
+
+      // Выбор документа для отзыва доступа
+      if (accessState.step === "selecting_document_for_revoke" && accessState.documents) {
+        const num = parseInt(text, 10);
+        const docs = accessState.documents;
+        if (!num || num < 1 || num > docs.length) {
+          await ctx.reply("Некорректный номер. Пожалуйста, отправьте число из списка.");
+          return;
+        }
+        const doc = docs[num - 1];
+        
+        // Получаем список пользователей с доступом к этому документу
+        const accessList = await getDocumentAccessList(doc.id);
+        if (!accessList.success || accessList.accessList.length === 0) {
+          await ctx.reply("У этого документа нет пользователей с доступом.", ACCESS_MENU);
+          accessStates.delete(ctx.from!.id);
+          return;
+        }
+        
+        const list = accessList.accessList.map((access: any, i: number) =>
+          `#${i+1} @${access.username}\nПредоставлен: ${new Date(access.granted_at).toLocaleString()}\nАдмином: @${access.granted_by_username}`
+        ).join("\n\n");
+        
+        await ctx.reply(
+          `Выберите номер пользователя для отзыва доступа к документу '${doc.original_name || doc.filename}':\n\n${list}`,
+          Markup.keyboard([["Отмена"]]).oneTime().resize()
+        );
+        accessStates.set(ctx.from!.id, { 
+          step: "selecting_user_for_revoke", 
+          documents: docs, 
+          selectedDocId: doc.id, 
+          accessList: accessList.accessList 
+        });
+        return;
+      }
+
+      // Выбор пользователя для отзыва доступа
+      if (accessState.step === "selecting_user_for_revoke" && accessState.accessList && accessState.selectedDocId) {
+        const num = parseInt(text, 10);
+        const accessList = accessState.accessList;
+        if (!num || num < 1 || num > accessList.length) {
+          await ctx.reply("Некорректный номер. Пожалуйста, отправьте число из списка.");
+          return;
+        }
+        const access = accessList[num - 1];
+        
+        const result = await revokeDocumentAccess(accessState.selectedDocId, access.username);
+        if (result.success) {
+          await ctx.reply(result.message, ACCESS_MENU);
+          await logAdminAction(ctx, "revoke_access", "document", accessState.selectedDocId, null, `username: ${access.username}`);
+        } else {
+          await ctx.reply(result.message, ACCESS_MENU);
+        }
+        accessStates.delete(ctx.from!.id);
+        return;
+      }
+
+      // Выбор документа для просмотра списка доступа
+      if (accessState.step === "selecting_document_for_list" && accessState.documents) {
+        const num = parseInt(text, 10);
+        const docs = accessState.documents;
+        if (!num || num < 1 || num > docs.length) {
+          await ctx.reply("Некорректный номер. Пожалуйста, отправьте число из списка.");
+          return;
+        }
+        const doc = docs[num - 1];
+        
+        const accessList = await getDocumentAccessList(doc.id);
+        if (!accessList.success || accessList.accessList.length === 0) {
+          await ctx.reply("У этого документа нет пользователей с доступом.", ACCESS_MENU);
+          accessStates.delete(ctx.from!.id);
+          return;
+        }
+        
+        const list = accessList.accessList.map((access: any, i: number) =>
+          `#${i+1} @${access.username}\nПредоставлен: ${new Date(access.granted_at).toLocaleString()}\nАдмином: @${access.granted_by_username}\nСтатус: ${access.is_active ? '✅ Активен' : '❌ Отозван'}`
+        ).join("\n\n");
+        
+        await ctx.reply(
+          `📋 Список пользователей с доступом к документу '${doc.original_name || doc.filename}':\n\n${list}`,
+          ACCESS_MENU
+        );
+        accessStates.delete(ctx.from!.id);
+        return;
+      }
+
+      // Если пользователь нажал "Отмена" — сбросить состояние
+      if (text === "Отмена") {
+        accessStates.delete(ctx.from!.id);
+        await ctx.reply("Действие отменено.", ACCESS_MENU);
+        return;
+      }
+
+      // Если пользователь нажал "Назад в главное меню" — сбросить состояние
+      if (text === "Назад в главное меню") {
+        accessStates.delete(ctx.from!.id);
         await ctx.reply(
           "Выберите действие:",
           MAIN_MENU
