@@ -40,7 +40,7 @@ export async function searchInstructionsWithAccess(query: string, username?: str
   const res = await pool.query(
     `SELECT ic.*, ic.embedding <#> $1 AS distance, d.id as document_id
      FROM instruction_chunks ic
-     JOIN documents d ON ic.filename = d.filename
+     JOIN documents d ON ic.filename = d.original_name OR ic.filename = SUBSTRING(d.filename FROM '([^/]+)$')
      WHERE ic.embedding IS NOT NULL
      ORDER BY distance ASC
      LIMIT 20;`,
@@ -84,7 +84,7 @@ async function fallbackSearchWithAccess(query: string, username: string) {
   const res = await pool.query(
     `SELECT ic.*, d.id as document_id
      FROM instruction_chunks ic
-     JOIN documents d ON ic.filename = d.filename
+     JOIN documents d ON ic.filename = d.original_name OR ic.filename = SUBSTRING(d.filename FROM '([^/]+)$')
      WHERE ic.content ILIKE $1
      LIMIT 20;`,
     [`%${query}%`]

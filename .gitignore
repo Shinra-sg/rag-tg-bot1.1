@@ -47,4 +47,5 @@ node_modules/
 src/data/parsed/
 src/data/raw/
 .cursor/
+src/docks/
  
