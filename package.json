@@ -11,6 +11,7 @@
     "start:bot": "ts-node src/index.ts",
     "start": "ts-node src/index.ts",
     "start:admin": "ts-node src/admin-bot/index.ts",
+    "start:dashboard": "ts-node src/dashboard/dashboard.ts",
     "setup:admins": "ts-node src/utils/setupAdminsTable.ts",
     "test:admins": "ts-node src/utils/testAdmins.ts",
     "check:admins": "ts-node src/utils/checkAdmins.ts",
@@ -20,10 +21,22 @@
     "clean:duplicates": "ts-node src/utils/cleanDuplicates.ts",
     "stop:all": "ts-node src/utils/stopAll.ts",
     "setup:access": "ts-node src/utils/setupDocumentAccess.ts",
-    "test:access": "ts-node src/utils/testDocumentAccess.ts"
+    "test:access": "ts-node src/utils/testDocumentAccess.ts",
+    "test:system": "ts-node src/utils/testSystem.ts",
+    "cleanup:system": "ts-node -e \"require('./src/utils/cleanup').performFullCleanup().then(console.log).catch(console.error)\"",
+    "stats:system": "ts-node -e \"require('./src/utils/cleanup').getDatabaseStats().then(console.log).catch(console.error)\"",
+    "optimize:db": "ts-node -e \"require('./src/utils/cleanup').optimizeDatabase().then(console.log).catch(console.error)\"",
+    "init:system": "ts-node src/utils/initialize.ts",
+    "setup:analytics": "ts-node src/utils/setupAnalytics.ts",
+    "test:analytics": "ts-node -e \"require('./src/utils/analytics').getSearchAnalytics().then(console.log).catch(console.error)\"",
+    "test:hybrid-search": "ts-node -e \"require('./src/utils/hybridSearch').hybridSearch('тест').then(console.log).catch(console.error)\"",
+    "test:new-formats": "ts-node -e \"require('./src/utils/documentParsers').getSupportedFormats().then(console.log).catch(console.error)\"",
+    "install:python-deps": "pip3 install openpyxl python-docx python-pptx pandas",
+    "test:new-features": "ts-node src/utils/testNewFeatures.ts"
   },
   "dependencies": {
     "dotenv": "^17.1.0",
+    "express": "^4.18.2",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.3.93",
     "pg": "^8.16.3",
@@ -35,6 +48,7 @@
     "unist-util-visit": "^2.0.3"
   },
   "devDependencies": {
+    "@types/express": "^4.17.23",
     "@types/node": "^24.0.12",
     "@types/pg": "^8.15.4",
     "nodemon": "^3.1.10",

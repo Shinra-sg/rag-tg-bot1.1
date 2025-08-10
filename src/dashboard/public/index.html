@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Bot Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+        }
+
+        .stat-card h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+
+        .stat-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .charts-section {
+            padding: 30px;
+            border-top: 1px solid #eee;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .chart-container h3 {
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .chart-wrapper {
+            width: 400px;
+            height: 300px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .popular-queries {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin: 30px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .popular-queries h3 {
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .query-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            transition: background-color 0.3s;
+        }
+
+        .query-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .query-text {
+            flex: 1;
+            font-weight: 500;
+        }
+
+        .query-count {
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+
+        .error {
+            background: #ff6b6b;
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px;
+            text-align: center;
+        }
+
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 20px;
+            transition: background-color 0.3s;
+        }
+
+        .refresh-btn:hover {
+            background: #5a6fd8;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .chart-wrapper {
+                width: 300px;
+                height: 250px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 RAG Bot Dashboard</h1>
+            <p>Мониторинг и аналитика системы поиска документов</p>
+        </div>
+
+        <button class="refresh-btn" onclick="loadDashboard()">🔄 Обновить данные</button>
+
+        <div id="loading" class="loading">
+            <h3>Загрузка данных...</h3>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="dashboard" style="display: none;">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Всего запросов</h3>
+                    <div class="stat-value" id="totalSearches">0</div>
+                    <div class="stat-label">за последние 30 дней</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Успешных запросов</h3>
+                    <div class="stat-value" id="successfulSearches">0</div>
+                    <div class="stat-label">с положительным результатом</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Среднее время ответа</h3>
+                    <div class="stat-value" id="avgResponseTime">0</div>
+                    <div class="stat-label">миллисекунд</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Активных пользователей</h3>
+                    <div class="stat-value" id="activeUsers">0</div>
+                    <div class="stat-label">за последние 30 дней</div>
+                </div>
+            </div>
+
+            <div class="charts-section">
+                <div class="chart-container">
+                    <h3>Типы поиска</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="searchTypesChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="popular-queries">
+                <h3>🔥 Популярные запросы</h3>
+                <div id="popularQueriesList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let searchTypesChart;
+
+        async function loadDashboard() {
+            const loading = document.getElementById('loading');
+            const dashboard = document.getElementById('dashboard');
+            const error = document.getElementById('error');
+
+            loading.style.display = 'block';
+            dashboard.style.display = 'none';
+            error.style.display = 'none';
+
+            try {
+                // Загружаем аналитику
+                const analyticsResponse = await fetch('/api/analytics?days=30');
+                const analytics = await analyticsResponse.json();
+
+                if (analytics.error) {
+                    throw new Error(analytics.error);
+                }
+
+                // Загружаем популярные запросы
+                const queriesResponse = await fetch('/api/popular-queries?limit=10');
+                const queries = await queriesResponse.json();
+
+                if (queries.error) {
+                    throw new Error(queries.error);
+                }
+
+                // Обновляем статистику
+                document.getElementById('totalSearches').textContent = analytics.totalSearches.toLocaleString();
+                document.getElementById('successfulSearches').textContent = analytics.successfulSearches.toLocaleString();
+                document.getElementById('avgResponseTime').textContent = Math.round(analytics.averageResponseTime);
+                document.getElementById('activeUsers').textContent = analytics.totalSearches > 0 ? 'Активен' : 'Нет данных';
+
+                // Создаем график типов поиска
+                createSearchTypesChart(analytics.searchTypes);
+
+                // Обновляем популярные запросы
+                updatePopularQueries(queries);
+
+                loading.style.display = 'none';
+                dashboard.style.display = 'block';
+
+            } catch (err) {
+                console.error('Ошибка загрузки данных:', err);
+                loading.style.display = 'none';
+                error.style.display = 'block';
+                error.textContent = `Ошибка загрузки данных: ${err.message}`;
+            }
+        }
+
+        function createSearchTypesChart(searchTypes) {
+            const ctx = document.getElementById('searchTypesChart').getContext('2d');
+            
+            if (searchTypesChart) {
+                searchTypesChart.destroy();
+            }
+
+            const data = {
+                labels: ['Векторный', 'Ключевой', 'Гибридный'],
+                datasets: [{
+                    data: [searchTypes.vector || 0, searchTypes.keyword || 0, searchTypes.hybrid || 0],
+                    backgroundColor: [
+                        '#667eea',
+                        '#764ba2',
+                        '#f093fb'
+                    ],
+                    borderWidth: 0
+                }]
+            };
+
+            searchTypesChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: data,
+                options: {
+                    responsive: false,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        }
+
+        function updatePopularQueries(queries) {
+            const container = document.getElementById('popularQueriesList');
+            container.innerHTML = '';
+
+            if (queries.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #666;">Пока нет популярных запросов</p>';
+                return;
+            }
+
+            queries.forEach(query => {
+                const item = document.createElement('div');
+                item.className = 'query-item';
+                item.innerHTML = `
+                    <div class="query-text">"${query.query}"</div>
+                    <div class="query-count">${query.count}</div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        // Загружаем данные при загрузке страницы
+        document.addEventListener('DOMContentLoaded', loadDashboard);
+
+        // Автообновление каждые 5 минут
+        setInterval(loadDashboard, 5 * 60 * 1000);
+    </script>
+</body>
+</html> 

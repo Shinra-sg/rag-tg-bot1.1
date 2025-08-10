@@ -1,7 +1,7 @@
 import pool from "./db";
 import { execSync } from "child_process";
 
-interface SearchResult {
+export interface SearchResult {
   content: string;
   filename: string;
   source_ref: string;
@@ -9,7 +9,7 @@ interface SearchResult {
   search_type: 'vector' | 'keyword' | 'hybrid';
 }
 
-interface HybridSearchOptions {
+export interface HybridSearchOptions {
   vectorWeight?: number;
   keywordWeight?: number;
   maxResults?: number;
@@ -20,9 +20,14 @@ interface HybridSearchOptions {
  * Получает эмбеддинг для текста через Python-скрипт
  */
 function getQueryEmbedding(text: string): number[] {
-  const safeText = text.replace(/"/g, '\\"');
-  const output = execSync(`python3 get_query_embedding.py "${safeText}"`).toString();
-  return output.trim().split(',').map(Number);
+  try {
+    const safeText = text.replace(/"/g, '\\"');
+    const output = execSync(`python3 get_query_embedding.py "${safeText}"`).toString();
+    return output.trim().split(',').map(Number);
+  } catch (error) {
+    console.error("❌ Ошибка получения эмбеддинга:", error);
+    throw new Error(`Не удалось получить эмбеддинг для текста: ${error}`);
+  }
 }
 
 /**
@@ -41,14 +46,14 @@ async function vectorSearch(query: string, limit: number = 20): Promise<SearchRe
     );
 
     return res.rows.map((row: any) => ({
-      content: row.content,
-      filename: row.filename,
-      source_ref: row.source_ref,
-      score: 1 / (1 + row.distance), // Нормализуем расстояние в скор (0-1)
+      content: row.content || '',
+      filename: row.filename || '',
+      source_ref: row.source_ref || '',
+      score: 1 / (1 + (row.distance || 0)), // Нормализуем расстояние в скор (0-1)
       search_type: 'vector' as const
     }));
   } catch (e) {
-    console.error("Ошибка векторного поиска:", e);
+    console.error("❌ Ошибка векторного поиска:", e);
     return [];
   }
 }
@@ -80,14 +85,14 @@ async function keywordSearch(query: string, limit: number = 20): Promise<SearchR
     );
 
     return res.rows.map((row: any) => ({
-      content: row.content,
-      filename: row.filename,
-      source_ref: row.source_ref,
-      score: Math.min(1, row.keyword_count / keywords.length), // Нормализуем скор
+      content: row.content || '',
+      filename: row.filename || '',
+      source_ref: row.source_ref || '',
+      score: Math.min(1, (row.keyword_count || 0) / keywords.length), // Нормализуем скор
       search_type: 'keyword' as const
     }));
   } catch (e) {
-    console.error("Ошибка ключевого поиска:", e);
+    console.error("❌ Ошибка ключевого поиска:", e);
     return [];
   }
 }

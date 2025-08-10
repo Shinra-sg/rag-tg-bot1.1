@@ -2,9 +2,21 @@ import pool from "./db";
 import fs from "fs";
 import path from "path";
 
-async function setupAdminsTable() {
+export async function setupAdminsTable() {
   try {
     console.log("Создание таблицы admins...");
+    
+    // Проверяем, существует ли таблица
+    const checkResult = await pool.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_name = 'admins'
+    `);
+    
+    if (checkResult.rows.length > 0) {
+      console.log("✅ Таблица admins уже существует");
+      return;
+    }
     
     // Читаем SQL файл
     const sqlPath = path.join(__dirname, "create_admins_table.sql");
@@ -15,25 +27,7 @@ async function setupAdminsTable() {
     
     console.log("✅ Таблица admins успешно создана!");
     
-    // Проверяем, что таблица создана
-    const result = await pool.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' AND table_name = 'admins'
-    `);
-    
-    if (result.rows.length > 0) {
-      console.log("✅ Таблица admins существует в базе данных");
-    } else {
-      console.log("❌ Таблица admins не найдена в базе данных");
-    }
-    
   } catch (error) {
     console.error("❌ Ошибка при создании таблицы admins:", error);
-  } finally {
-    await pool.end();
   }
-}
-
-// Запускаем скрипт
-setupAdminsTable(); 
+} 

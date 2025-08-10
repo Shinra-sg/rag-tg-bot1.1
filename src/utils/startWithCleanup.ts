@@ -1,5 +1,6 @@
 import { execSync } from "child_process";
 import pool from "./db";
+import { spawn } from "child_process";
 
 async function startWithCleanup() {
   try {
@@ -46,6 +47,33 @@ async function startWithCleanup() {
       console.log("❌ Ошибка парсера:", e);
     }
     
+    // 3.5. Настройка аналитики
+    console.log("\n3.5. Настройка аналитики...");
+    try {
+      execSync("ts-node src/utils/setupAnalytics.ts", { stdio: 'inherit' });
+      console.log("✅ Аналитика настроена");
+    } catch (e) {
+      console.log("❌ Ошибка настройки аналитики:", e);
+    }
+    
+    // 3.6. Настройка доступа к документам
+    console.log("\n3.6. Настройка доступа к документам...");
+    try {
+      execSync("ts-node src/utils/setupDocumentAccess.ts", { stdio: 'inherit' });
+      console.log("✅ Доступ к документам настроен");
+    } catch (e) {
+      console.log("❌ Ошибка настройки доступа к документам:", e);
+    }
+    
+    // 3.7. Настройка админов
+    console.log("\n3.7. Настройка админов...");
+    try {
+      execSync("ts-node src/utils/setupAdminsTable.ts", { stdio: 'inherit' });
+      console.log("✅ Админы настроены");
+    } catch (e) {
+      console.log("❌ Ошибка настройки админов:", e);
+    }
+    
     // 4. Генерация эмбеддингов
     console.log("\n4. Генерация эмбеддингов...");
     try {
@@ -66,19 +94,57 @@ async function startWithCleanup() {
     
     // 6. Запуск ботов
     console.log("\n6. Запуск ботов...");
-    console.log("   🤖 Основной бот и админ-бот запущены в фоне");
+    
+    // Проверяем, не запущены ли уже боты
+    try {
+      const checkBots = execSync("ps aux | grep -E 'ts-node.*(src/index|admin-bot|dashboard)' | grep -v grep", { encoding: 'utf8' });
+      if (checkBots.trim()) {
+        console.log("   ⚠️ Боты и дашборд уже запущены, останавливаем...");
+        execSync("pkill -f 'ts-node.*(src/index|admin-bot|dashboard)'", { stdio: 'ignore' });
+        // Ждем немного для завершения процессов
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    } catch (e) {
+      // Если команда не нашла процессы, это нормально
+    }
+    
+    console.log("   🤖 Основной бот, админ-бот и дашборд запущены в фоне");
     console.log("   💡 Для остановки используйте: pkill -f 'ts-node'");
     
     // Запускаем ботов в фоне
     try {
-      execSync("ts-node src/index.ts &", { stdio: 'inherit' });
-      execSync("ts-node src/admin-bot/index.ts &", { stdio: 'inherit' });
+      // Запускаем основной бот
+      const mainBot = spawn("ts-node", ["src/index.ts"], { 
+        stdio: 'inherit',
+        detached: true 
+      });
+      mainBot.unref();
+      
+      // Запускаем админ-бот
+      const adminBot = spawn("ts-node", ["src/admin-bot/index.ts"], { 
+        stdio: 'inherit',
+        detached: true 
+      });
+      adminBot.unref();
+      
+      // Запускаем дашборд
+      const dashboard = spawn("ts-node", ["src/dashboard/dashboard.ts"], { 
+        stdio: 'inherit',
+        detached: true 
+      });
+      dashboard.unref();
+      
+      console.log("   ✅ Боты и дашборд запущены в фоне");
     } catch (e) {
       console.log("❌ Ошибка запуска ботов:", e);
     }
     
     console.log("\n🎉 Система успешно запущена!");
     console.log("📊 Статистика:");
+    console.log("🌐 Доступные сервисы:");
+    console.log("   🤖 Основной бот: http://localhost:3000");
+    console.log("   👑 Админ-бот: http://localhost:3000");
+    console.log("   📊 Дашборд: http://localhost:3001");
     
     const finalResult = await pool.query(`
       SELECT 

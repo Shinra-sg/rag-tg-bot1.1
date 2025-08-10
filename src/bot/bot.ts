@@ -1,9 +1,19 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { searchInstructions } from "../utils/search";
 import { searchInstructionsWithAccess, hasAnyAccess } from "../utils/searchWithAccess";
+import { hybridSearch, smartSearch, SearchResult } from "../utils/hybridSearch";
 import { askLLM } from "../utils/generateAnswer";
 import { formatSearchResults, formatSummary } from "../utils/formatSources";
 import { formatSearchResultsPlain, formatSummaryPlain } from "../utils/formatSourcesPlain";
+import { 
+  logSearch, 
+  getUserAnalytics, 
+  addToFavorites, 
+  removeFromFavorites, 
+  getUserSearchHistory,
+  getPopularQueries 
+} from "../utils/analytics";
+import { performFullCleanup, getDatabaseStats } from "../utils/cleanup";
 
 export function startBot() {
   const token = process.env.BOT_TOKEN;
@@ -12,7 +22,7 @@ export function startBot() {
   const bot = new Telegraf(token);
   
   // Хранилище результатов поиска для каждого пользователя
-  const userSearchResults = new Map<number, any[]>();
+  const userSearchResults = new Map<number, SearchResult[]>();
   
   // Хранилище ID последних сообщений бота для каждого пользователя
   const lastBotMessages = new Map<number, number[]>();
@@ -27,18 +37,47 @@ export function startBot() {
     const userId = ctx.from?.id;
     if (userId && lastBotMessages.has(userId)) {
       const messagesToDelete = lastBotMessages.get(userId)!;
-      console.log(`[${new Date().toISOString()}] Deleting ${messagesToDelete.length} messages for user ${userId}`);
+      console.log(`[${new Date().toISOString()}] 🗑️ Удаление ${messagesToDelete.length} сообщений для пользователя ${userId}`);
       
+      let deletedCount = 0;
       for (const msgId of messagesToDelete) {
         try {
           await ctx.telegram.deleteMessage(ctx.chat!.id, msgId);
-          console.log(`[${new Date().toISOString()}] Successfully deleted message ${msgId} for user ${userId}`);
+          deletedCount++;
+          console.log(`[${new Date().toISOString()}] ✅ Удалено сообщение ${msgId} для пользователя ${userId}`);
         } catch (e) {
-          console.log(`[${new Date().toISOString()}] Failed to delete message ${msgId} for user ${userId}:`, e);
+          // Сообщение уже удалено или не найдено — игнорируем ошибку
+          console.log(`[${new Date().toISOString()}] ⚠️ Сообщение ${msgId} уже удалено или не найдено для пользователя ${userId}`);
         }
       }
+      
+      console.log(`[${new Date().toISOString()}] 📊 Удалено ${deletedCount}/${messagesToDelete.length} сообщений для пользователя ${userId}`);
       lastBotMessages.delete(userId);
     }
+  }
+
+  // Функция для периодической очистки системы
+  async function scheduleCleanup() {
+    // Очистка каждые 24 часа
+    setInterval(async () => {
+      try {
+        console.log("🧹 Запуск плановой очистки системы...");
+        const cleanupResult = await performFullCleanup();
+        
+        if (cleanupResult.success) {
+          console.log(`✅ Плановая очистка завершена: ${cleanupResult.message}`);
+        } else {
+          console.warn(`⚠️ Плановая очистка завершена с ошибками: ${cleanupResult.message}`);
+        }
+        
+        // Получаем статистику после очистки
+        const stats = await getDatabaseStats();
+        console.log(`📊 Статистика после очистки: ${stats.totalSize} общий размер`);
+        
+      } catch (error) {
+        console.error("❌ Ошибка при плановой очистке:", error);
+      }
+    }, 24 * 60 * 60 * 1000); // 24 часа
   }
 
   bot.start(async (ctx: Context) => {
@@ -189,19 +228,12 @@ export function startBot() {
     const userId = ctx.from?.id;
     const messageText = ctx.message && "text" in ctx.message ? ctx.message.text : "";
     logAction("text_message", userId, { text: messageText.substring(0, 50) + "..." });
+    
     // Удаляем старые сообщения бота для этого пользователя
     if (userId) {
       if (lastBotMessages.has(userId)) {
-        console.log(`[${new Date().toISOString()}] Deleting previous bot messages for user ${userId} before processing new query`);
-        for (const msgId of lastBotMessages.get(userId)!) {
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat!.id, msgId);
-          } catch (e) {
-            // Сообщение уже удалено или не найдено — игнорируем ошибку
-            console.log(`[${new Date().toISOString()}] Message ${msgId} already deleted or not found for user ${userId}`);
-          }
-        }
-        lastBotMessages.delete(userId);
+        console.log(`[${new Date().toISOString()}] 🗑️ Удаление предыдущих сообщений бота для пользователя ${userId} перед обработкой нового запроса`);
+        await deleteLastBotMessages(ctx);
       }
     }
 
@@ -228,6 +260,8 @@ export function startBot() {
     }
 
     const text = msg.text;
+    const startTime = Date.now();
+    
     const processingMsg = await ctx.reply(`🔍 *Обрабатываю ваш запрос...*
 
 *Запрос:* "${text}"
@@ -238,15 +272,17 @@ export function startBot() {
     });
     const processingMsgId = processingMsg.message_id;
 
-    // Проверяем доступ пользователя к документам
-    const username = ctx.from?.username;
-    let results;
-    
-    if (username) {
-      // Проверяем, есть ли у пользователя доступ к любым документам
-      const hasAccess = await hasAnyAccess(username);
-      if (!hasAccess) {
-        const noAccessMessage = `🔒 *Доступ к документам ограничен*
+    try {
+      // Проверяем доступ пользователя к документам
+      const username = ctx.from?.username;
+      let results: SearchResult[] | null = null;
+      let searchType: 'vector' | 'keyword' | 'hybrid' = 'hybrid';
+      
+      if (username) {
+        // Проверяем, есть ли у пользователя доступ к любым документам
+        const hasAccess = await hasAnyAccess(username);
+        if (!hasAccess) {
+          const noAccessMessage = `🔒 *Доступ к документам ограничен*
 
 У вас нет доступа к корпоративным документам.
 
@@ -259,119 +295,108 @@ export function startBot() {
 • Нажмите "ℹ️ Помощь" для получения справки
 • Обратитесь к администратору для получения доступа`;
 
-        await ctx.reply(noAccessMessage, {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback("ℹ️ Помощь", "help")],
-            [Markup.button.callback("🤖 О проекте", "about")]
-          ])
-        });
-        if (userId) {
-          lastBotMessages.set(userId, [processingMsgId]);
-        }
-        return;
-      }
-      
-      // Используем поиск с проверкой доступа
-      results = await searchInstructionsWithAccess(text, username);
-    } else {
-      // Если username не указан, используем обычный поиск (для обратной совместимости)
-      results = await searchInstructions(text);
-    }
-    if (results && results.length > 0) {
-      // Формируем контекст для Ollama
-      const context = results.map((r, i) => `Фрагмент #${i+1}: ${r.content}`).join("\n\n");
-      const prompt = `Ты — помощник по внутренним инструкциям компании. Используй только приведённые ниже фрагменты для ответа на вопрос пользователя. Если ответа нет в этих фрагментах — так и скажи. Сформулируй короткое пояснение или резюме на основе найденных фрагментов, не добавляй ничего от себя. Полный текст инструкции будет приведён ниже.\n\nФрагменты:\n${context}\n\nВопрос: ${text}\n\nКраткий ответ:`;
-      let answer = "";
-      try {
-        answer = await askLLM(prompt, "deepseek-r1");
-        // Удаляем размышления <think>...</think> из ответа
-        answer = answer.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-      } catch (e) {
-        answer = "Ошибка генерации ответа ИИ.";
-      }
-      const sentMessages: number[] = [processingMsgId];
-      
-      // Сохраняем результаты поиска для пользователя
-      if (userId) {
-        userSearchResults.set(userId, results);
-      }
-      
-      // Показываем краткую сводку источников
-      let summaryMsg;
-      try {
-        const summary = formatSummary(results);
-        summaryMsg = await ctx.reply(summary, { parse_mode: 'Markdown' });
-      } catch (error) {
-        console.log("Markdown parsing error in summary, using plain format:", error);
-        const summary = formatSummaryPlain(results);
-        summaryMsg = await ctx.reply(summary);
-      }
-      sentMessages.push(summaryMsg.message_id);
-      
-      const msg1 = await ctx.reply(answer, Markup.inlineKeyboard([
-        [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
-        [Markup.button.callback("📄 Показать источники", "show_sources")],
-        [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")],
-        ...results.map((r, i) => [Markup.button.callback(`📁 Скачать ${r.filename}`, `download_${encodeURIComponent(r.filename)}`)])
-      ]));
-      sentMessages.push(msg1.message_id);
-
-      // --- Весь код, связанный с выделением и parse_mode, закомментирован ---
-      // Гугл-стиль: показываем контекст вокруг найденного чанка
-      function highlightKey(text: string, key: string): string {
-        const cleanKey = key.replace(/\n/g, ' ').trim();
-        // Не выделяем слишком короткие или подозрительные фразы
-        if (cleanKey.length < 3 || !/[a-zA-Zа-яА-Я0-9]/.test(cleanKey)) {
-          // Экранируем спецсимволы в тексте, чтобы Telegram не ругался
-          return text.replace(/([_\*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-        }
-        // Экранируем спецсимволы кроме * в ключе
-        const safeKey = cleanKey.replace(/([_\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-        // Если ключ найден — выделяем, иначе просто экранируем всё предложение
-        if (text.includes(cleanKey)) {
-          return text.replace(cleanKey, `*${safeKey}*`);
-        }
-        // Если не нашли ключ — экранируем всё предложение
-        return text.replace(/([_\*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-      }
-      let googleStyleBlocks = await Promise.all(results.map(async (r, i) => {
-        const path = require("path");
-        const fs = require("fs");
-        const filePath = path.join(__dirname, "../data/raw", r.filename);
-        if (!fs.existsSync(filePath)) return `**#${i+1}**\n*${r.content.trim().split(/[.!?]/)[0]}*\n\n📄 **Источник:** ${r.filename} (${r.source_ref})`;
-        let fullText = "";
-        try {
-          fullText = fs.readFileSync(filePath, "utf-8");
-        } catch {
-          return `**#${i+1}**\n*${r.content.trim().split(/[.!?]/)[0]}*\n\n📄 **Источник:** ${r.filename} (${r.source_ref})`;
-        }
-        const sentences: string[] = fullText.match(/[^.!?\n]+[.!?\n]+/g) || [fullText];
-        let idx = sentences.findIndex((s: string) => s.includes(r.content.trim().slice(0, 10)));
-        if (idx === -1) return `**#${i+1}**\n*${r.content.trim().split(/[.!?]/)[0]}*\n\n📄 **Источник:** ${r.filename} (${r.source_ref})`;
-        const before = idx > 0 ? sentences[idx-1].trim() : "";
-        const after = idx < sentences.length-1 ? sentences[idx+1].trim() : "";
-        const keyPhrase = r.content.trim().split(/[.!?]/)[0];
-        let main = highlightKey(sentences[idx].trim(), keyPhrase);
-        // Формируем компактный блок с источником
-        let contextText = [before, main, after].filter(Boolean).join(" ").trim();
-        // Если контекст пустой или подозрительный — показываем весь чанк
-        if (!contextText || contextText.length < 10 || /^\W+$/.test(contextText)) {
-          contextText = r.content.trim();
-          // Если и чанк подозрительный — пишем "_Фрагмент не найден_"
-          if (!contextText || contextText.length < 5 || /^\W+$/.test(contextText)) {
-            contextText = "_Фрагмент не найден_";
+          await ctx.reply(noAccessMessage, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback("ℹ️ Помощь", "help")],
+              [Markup.button.callback("🤖 О проекте", "about")]
+            ])
+          });
+          if (userId) {
+            lastBotMessages.set(userId, [processingMsgId]);
           }
+          return;
         }
-        return `**#${i+1}**\n${contextText}\n\n📕 **Источник:** ${r.filename} (${r.source_ref})`;
-      }));
-      // Полные источники теперь показываются по кнопке "Показать источники"
-      // --- Конец изменений ---
-      if (userId) {
-        lastBotMessages.set(userId, sentMessages);
+        
+        // Используем гибридный поиск с проверкой доступа
+        try {
+          const hybridResults = await hybridSearch(text, { maxResults: 5 });
+          results = hybridResults;
+          searchType = hybridResults[0]?.search_type || 'hybrid';
+        } catch (e) {
+          console.error("❌ Ошибка гибридного поиска, fallback на обычный:", e);
+          const fallbackResults = await searchInstructionsWithAccess(text, username);
+          results = fallbackResults.map(r => ({
+            content: r.content,
+            filename: r.filename,
+            source_ref: r.source_ref,
+            score: 1.0,
+            search_type: 'vector' as const
+          }));
+          searchType = 'vector';
+        }
+      } else {
+        // Если username не указан, используем гибридный поиск
+        try {
+          const hybridResults = await hybridSearch(text, { maxResults: 5 });
+          results = hybridResults;
+          searchType = hybridResults[0]?.search_type || 'hybrid';
+        } catch (e) {
+          console.error("❌ Ошибка гибридного поиска, fallback на обычный:", e);
+          const fallbackResults = await searchInstructions(text);
+          results = fallbackResults.map(r => ({
+            content: r.content,
+            filename: r.filename,
+            source_ref: r.source_ref,
+            score: 1.0,
+            search_type: 'vector' as const
+          }));
+          searchType = 'vector';
+        }
       }
-    } else {
-      const fallbackMsg = await ctx.reply(`🔍 *Результаты поиска*
+      
+      if (results && results.length > 0) {
+        // Формируем контекст для Ollama
+        const context = results.map((r, i) => `Фрагмент #${i+1}: ${r.content}`).join("\n\n");
+        const prompt = `Ты — помощник по внутренним инструкциям компании. Используй только приведённые ниже фрагменты для ответа на вопрос пользователя. Если ответа нет в этих фрагментах — так и скажи. Сформулируй короткое пояснение или резюме на основе найденных фрагментов, не добавляй ничего от себя. Полный текст инструкции будет приведён ниже.\n\nФрагменты:\n${context}\n\nВопрос: ${text}\n\nКраткий ответ:`;
+        let answer = "";
+        try {
+          answer = await askLLM(prompt, "deepseek-r1");
+          // Удаляем размышления <think>...</think> из ответа
+          answer = answer.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+        } catch (e) {
+          console.error("❌ Ошибка генерации ответа ИИ:", e);
+          answer = "Ошибка генерации ответа ИИ. Попробуйте переформулировать вопрос.";
+        }
+        const sentMessages: number[] = [processingMsgId];
+        
+        // Сохраняем результаты поиска для пользователя
+        if (userId) {
+          userSearchResults.set(userId, results);
+        }
+        
+        // Показываем краткую сводку источников
+        let summaryMsg;
+        try {
+          const summary = formatSummary(results);
+          summaryMsg = await ctx.reply(summary, { parse_mode: 'Markdown' });
+        } catch (error) {
+          console.log("⚠️ Ошибка Markdown в сводке, используем plain формат:", error);
+          const summary = formatSummaryPlain(results);
+          summaryMsg = await ctx.reply(summary);
+        }
+        sentMessages.push(summaryMsg.message_id);
+        
+        // Логируем аналитику
+        const responseTime = Date.now() - startTime;
+        if (userId) {
+          await logSearch(userId, username, text, searchType, results.length, responseTime, true);
+        }
+
+        const msg1 = await ctx.reply(answer, Markup.inlineKeyboard([
+          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+          [Markup.button.callback("📄 Показать источники", "show_sources")],
+          [Markup.button.callback("⭐ Добавить в избранное", `favorite_${encodeURIComponent(text)}`)],
+          [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")],
+          ...results.map((r) => [Markup.button.callback(`📁 Скачать ${r.filename}`, `download_${encodeURIComponent(r.filename)}`)])
+        ]));
+        sentMessages.push(msg1.message_id);
+
+        if (userId) {
+          lastBotMessages.set(userId, sentMessages);
+        }
+      } else {
+        const fallbackMsg = await ctx.reply(`🔍 *Результаты поиска*
 
 *Запрос:* "${text}"
 
@@ -388,14 +413,34 @@ export function startBot() {
 • Попробуйте переформулировать вопрос
 • Используйте другие ключевые слова
 • Обратитесь к администратору для добавления документов`, {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+            [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")]
+          ])
+        });
+        if (userId) {
+          lastBotMessages.set(userId, [fallbackMsg.message_id]);
+        }
+      }
+    } catch (error) {
+      console.error("❌ Ошибка при обработке запроса:", error);
+      const errorMsg = await ctx.reply(`❌ *Произошла ошибка*
+
+При обработке вашего запроса произошла ошибка.
+
+*Что делать:*
+• Попробуйте повторить запрос
+• Обратитесь к администратору, если проблема повторяется
+• Используйте кнопку "ℹ️ Помощь" для получения справки`, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-          [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")]
+          [Markup.button.callback("ℹ️ Помощь", "help")]
         ])
       });
       if (userId) {
-        lastBotMessages.set(userId, [fallbackMsg.message_id]);
+        lastBotMessages.set(userId, [errorMsg.message_id]);
       }
     }
   });
@@ -638,6 +683,192 @@ export function startBot() {
     }
   });
 
+  // Обработка добавления в избранное
+  bot.action(/favorite_(.+)/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const query = decodeURIComponent(ctx.match[1]);
+      const userId = ctx.from?.id;
+      
+      if (userId) {
+        const success = await addToFavorites(userId, query);
+        if (success) {
+          const msg = await ctx.reply(`⭐ *Добавлено в избранное!*
+
+Запрос "${query}" успешно добавлен в ваше избранное.
+
+*Что дальше:*
+• Используйте "📋 История поиска" для просмотра избранного
+• Повторите поиск в любое время`, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback("📋 История поиска", "search_history")],
+              [Markup.button.callback("🔍 Новый вопрос", "ask_question")]
+            ])
+          });
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(msg.message_id);
+          lastBotMessages.set(userId, arr);
+        } else {
+          await ctx.reply("❌ Ошибка при добавлении в избранное");
+        }
+      }
+    } catch (error) {
+      console.error("Error in favorite handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при добавлении в избранное");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
+    }
+  });
+
+  // Обработка истории поиска
+  bot.action("search_history", async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const userId = ctx.from?.id;
+      
+      if (userId) {
+        const history = await getUserSearchHistory(userId, 5);
+        const analytics = await getUserAnalytics(userId);
+        
+        if (history.length === 0) {
+          const msg = await ctx.reply(`📋 *История поиска*
+
+У вас пока нет истории поиска.
+
+*Начните поиск:*
+• Задайте вопрос для поиска информации
+• Ваши запросы будут сохраняться здесь`, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+              [Markup.button.callback("ℹ️ Помощь", "help")]
+            ])
+          });
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(msg.message_id);
+          lastBotMessages.set(userId, arr);
+          return;
+        }
+
+        const historyText = history.map((item, i) => 
+          `${i + 1}. "${item.query}" (${item.resultsCount} результатов, ${item.searchType})`
+        ).join('\n');
+
+        const analyticsText = analytics ? 
+          `\n*Ваша статистика:*
+• Всего запросов: ${analytics.totalSearches}
+• Избранных запросов: ${analytics.favoriteQueries.length}
+• Последний поиск: ${analytics.lastSearch ? new Date(analytics.lastSearch).toLocaleDateString() : 'Нет'}` : '';
+
+        const msg = await ctx.reply(`📋 *История поиска*${analyticsText}
+
+*Последние запросы:*
+${historyText}
+
+*Избранные запросы:*
+${analytics?.favoriteQueries.length ? analytics.favoriteQueries.slice(0, 3).map(q => `• "${q}"`).join('\n') : 'Нет избранных запросов'}`, {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("📊 Популярные запросы", "popular_queries")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        const arr = lastBotMessages.get(userId) || [];
+        arr.push(msg.message_id);
+        lastBotMessages.set(userId, arr);
+      }
+    } catch (error) {
+      console.error("Error in search_history handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при получении истории");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
+    }
+  });
+
+  // Обработка популярных запросов
+  bot.action("popular_queries", async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const userId = ctx.from?.id;
+      
+      const popularQueries = await getPopularQueries(10);
+      
+      if (popularQueries.length === 0) {
+        const msg = await ctx.reply(`📊 *Популярные запросы*
+
+Пока нет популярных запросов.
+
+*Будьте первым:*
+• Задайте вопрос для поиска информации
+• Ваш запрос может стать популярным!`, {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("📋 История поиска", "search_history")]
+          ])
+        });
+        if (userId) {
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(msg.message_id);
+          lastBotMessages.set(userId, arr);
+        }
+        return;
+      }
+
+      const popularText = popularQueries.map((item, i) => 
+        `${i + 1}. "${item.query}" (${item.count} раз)`
+      ).join('\n');
+
+      const msg = await ctx.reply(`📊 *Популярные запросы*
+
+*Топ-10 популярных запросов:*
+${popularText}
+
+*Хотите попробовать один из них?*
+Просто скопируйте и отправьте любой запрос!`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+          [Markup.button.callback("📋 История поиска", "search_history")],
+          [Markup.button.callback("ℹ️ Помощь", "help")]
+        ])
+      });
+      if (userId) {
+        const arr = lastBotMessages.get(userId) || [];
+        arr.push(msg.message_id);
+        lastBotMessages.set(userId, arr);
+      }
+    } catch (error) {
+      console.error("Error in popular_queries handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при получении популярных запросов");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
+    }
+  });
+
   bot.launch();
-  console.log("Бот запущен");
+  console.log("🤖 Бот запущен");
+  
+  // Запускаем периодическую очистку
+  scheduleCleanup();
+  console.log("🧹 Периодическая очистка запланирована (каждые 24 часа)");
+  
+  // Обработка graceful shutdown
+  process.once('SIGINT', () => {
+    console.log("🛑 Получен сигнал SIGINT, останавливаем бота...");
+    bot.stop('SIGINT');
+  });
+  
+  process.once('SIGTERM', () => {
+    console.log("🛑 Получен сигнал SIGTERM, останавливаем бота...");
+    bot.stop('SIGTERM');
+  });
 }
