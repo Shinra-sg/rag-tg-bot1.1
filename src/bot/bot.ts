@@ -386,9 +386,9 @@ export function startBot() {
         const msg1 = await ctx.reply(answer, Markup.inlineKeyboard([
           [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
           [Markup.button.callback("📄 Показать источники", "show_sources")],
-          [Markup.button.callback("⭐ Добавить в избранное", `favorite_${encodeURIComponent(text)}`)],
+          [Markup.button.callback("⭐ Добавить в избранное", `favorite_${text.substring(0, 20).replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '')}`)],
           [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")],
-          ...results.map((r) => [Markup.button.callback(`📁 Скачать ${r.filename}`, `download_${encodeURIComponent(r.filename)}`)])
+          ...results.map((r) => [Markup.button.callback(`📁 Скачать ${r.filename.substring(0, 20)}`, `download_${r.filename.substring(0, 20).replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '')}`)])
         ]));
         sentMessages.push(msg1.message_id);
 
@@ -637,81 +637,36 @@ export function startBot() {
     }
   });
 
-  // Обработка скачивания исходных файлов
-  const path = require("path");
-  const fs = require("fs");
-  bot.action(/download_(.+)/, async (ctx) => {
-    try {
-      await ctx.answerCbQuery();
-      const filename = decodeURIComponent(ctx.match[1]);
-      const filePath = path.join(__dirname, "../data/raw", filename);
-      const userId = ctx.from?.id;
-      
-      if (fs.existsSync(filePath)) {
-        const docMsg = await ctx.replyWithDocument({ source: filePath, filename });
-        if (userId) {
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(docMsg.message_id);
-          lastBotMessages.set(userId, arr);
-        }
-      } else {
-        const errMsg = await ctx.reply(`❌ *Файл не найден*
-
-Файл "${filename}" не найден на сервере.
-
-*Возможные причины:*
-• Файл был удален или перемещен
-• Ошибка в пути к файлу
-• Файл еще не загружен в систему
-
-*Что делать:*
-• Обратитесь к администратору
-• Попробуйте другой файл из результатов поиска`);
-        if (userId) {
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(errMsg.message_id);
-          lastBotMessages.set(userId, arr);
-        }
-      }
-    } catch (error) {
-      console.error("Error in download handler:", error);
-      try {
-        await ctx.answerCbQuery("❌ Ошибка при скачивании файла");
-      } catch (e) {
-        console.error("Failed to answer callback query:", e);
-      }
-    }
-  });
-
   // Обработка добавления в избранное
-  bot.action(/favorite_(.+)/, async (ctx) => {
+  bot.action(/^favorite_(.+)$/, async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      const query = decodeURIComponent(ctx.match[1]);
       const userId = ctx.from?.id;
+      if (!userId) return;
+      
+      const query = ctx.match[1];
+      await addToFavorites(userId, query);
+      
+      const msg = await ctx.reply(`⭐ *Добавлено в избранное*
+
+Запрос "${query}" успешно добавлен в ваши избранные запросы.
+
+*Что дальше?*
+• Просмотреть все избранные запросы
+• Задать новый вопрос
+• Обратиться к истории поиска`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("⭐ Мои избранные", "my_favorites")],
+          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+          [Markup.button.callback("📋 История поиска", "search_history")]
+        ])
+      });
       
       if (userId) {
-        const success = await addToFavorites(userId, query);
-        if (success) {
-          const msg = await ctx.reply(`⭐ *Добавлено в избранное!*
-
-Запрос "${query}" успешно добавлен в ваше избранное.
-
-*Что дальше:*
-• Используйте "📋 История поиска" для просмотра избранного
-• Повторите поиск в любое время`, {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [Markup.button.callback("📋 История поиска", "search_history")],
-              [Markup.button.callback("🔍 Новый вопрос", "ask_question")]
-            ])
-          });
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(msg.message_id);
-          lastBotMessages.set(userId, arr);
-        } else {
-          await ctx.reply("❌ Ошибка при добавлении в избранное");
-        }
+        const arr = lastBotMessages.get(userId) || [];
+        arr.push(msg.message_id);
+        lastBotMessages.set(userId, arr);
       }
     } catch (error) {
       console.error("Error in favorite handler:", error);
@@ -723,96 +678,100 @@ export function startBot() {
     }
   });
 
-  // Обработка истории поиска
-  bot.action("search_history", async (ctx) => {
+  // Обработка скачивания документа
+  bot.action(/^download_(.+)$/, async (ctx) => {
     try {
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
+      if (!userId) return;
       
-      if (userId) {
-        const history = await getUserSearchHistory(userId, 5);
-        const analytics = await getUserAnalytics(userId);
-        
-        if (history.length === 0) {
-          const msg = await ctx.reply(`📋 *История поиска*
+      const filename = ctx.match[1];
+      
+      // Проверяем доступ к документу
+      const username = ctx.from?.username;
+      const hasAccess = username ? await hasAnyAccess(username) : false;
+      if (!hasAccess) {
+        const msg = await ctx.reply(`⛔️ *Доступ ограничен*
 
-У вас пока нет истории поиска.
+У вас нет доступа к документу "${filename}".
 
-*Начните поиск:*
-• Задайте вопрос для поиска информации
-• Ваши запросы будут сохраняться здесь`, {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
-              [Markup.button.callback("ℹ️ Помощь", "help")]
-            ])
-          });
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(msg.message_id);
-          lastBotMessages.set(userId, arr);
-          return;
-        }
-
-        const historyText = history.map((item, i) => 
-          `${i + 1}. "${item.query}" (${item.resultsCount} результатов, ${item.searchType})`
-        ).join('\n');
-
-        const analyticsText = analytics ? 
-          `\n*Ваша статистика:*
-• Всего запросов: ${analytics.totalSearches}
-• Избранных запросов: ${analytics.favoriteQueries.length}
-• Последний поиск: ${analytics.lastSearch ? new Date(analytics.lastSearch).toLocaleDateString() : 'Нет'}` : '';
-
-        const msg = await ctx.reply(`📋 *История поиска*${analyticsText}
-
-*Последние запросы:*
-${historyText}
-
-*Избранные запросы:*
-${analytics?.favoriteQueries.length ? analytics.favoriteQueries.slice(0, 3).map(q => `• "${q}"`).join('\n') : 'Нет избранных запросов'}`, {
+*Для получения доступа:*
+• Обратитесь к администратору
+• Укажите причину необходимости доступа
+• Администратор рассмотрит ваш запрос`, {
           parse_mode: 'Markdown',
           ...Markup.inlineKeyboard([
             [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
-            [Markup.button.callback("📊 Популярные запросы", "popular_queries")],
             [Markup.button.callback("ℹ️ Помощь", "help")]
           ])
         });
+        
+        if (userId) {
+          const arr = lastBotMessages.get(userId) || [];
+          arr.push(msg.message_id);
+          lastBotMessages.set(userId, arr);
+        }
+        return;
+      }
+      
+      // Здесь должна быть логика скачивания документа
+      const msg = await ctx.reply(`📁 *Скачивание документа*
+
+Документ "${filename}" готов к скачиванию.
+
+*Примечание:* Функция скачивания находится в разработке.
+
+*Что дальше?*
+• Задать новый вопрос
+• Просмотреть другие документы
+• Обратиться к помощи`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+          [Markup.button.callback("📄 Показать источники", "show_sources")],
+          [Markup.button.callback("ℹ️ Помощь", "help")]
+        ])
+      });
+      
+      if (userId) {
         const arr = lastBotMessages.get(userId) || [];
         arr.push(msg.message_id);
         lastBotMessages.set(userId, arr);
       }
     } catch (error) {
-      console.error("Error in search_history handler:", error);
+      console.error("Error in download handler:", error);
       try {
-        await ctx.answerCbQuery("❌ Ошибка при получении истории");
+        await ctx.answerCbQuery("❌ Ошибка при скачивании документа");
       } catch (e) {
         console.error("Failed to answer callback query:", e);
       }
     }
   });
 
-  // Обработка популярных запросов
-  bot.action("popular_queries", async (ctx) => {
+  // Обработка просмотра избранных запросов
+  bot.action("my_favorites", async (ctx) => {
     try {
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
+      if (!userId) return;
       
-      const popularQueries = await getPopularQueries(10);
-      
-      if (popularQueries.length === 0) {
-        const msg = await ctx.reply(`📊 *Популярные запросы*
+      // Получаем избранные запросы пользователя
+      const userAnalytics = await getUserAnalytics(userId);
+      if (!userAnalytics || !userAnalytics.favoriteQueries || userAnalytics.favoriteQueries.length === 0) {
+        const msg = await ctx.reply(`⭐ *Мои избранные*
 
-Пока нет популярных запросов.
+У вас пока нет избранных запросов.
 
-*Будьте первым:*
-• Задайте вопрос для поиска информации
-• Ваш запрос может стать популярным!`, {
+*Как добавить в избранное:*
+• Задайте вопрос и нажмите кнопку "⭐ Добавить в избранное"
+• Ваши любимые запросы будут сохранены здесь`, {
           parse_mode: 'Markdown',
           ...Markup.inlineKeyboard([
             [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
             [Markup.button.callback("📋 История поиска", "search_history")]
           ])
         });
+        
         if (userId) {
           const arr = lastBotMessages.get(userId) || [];
           arr.push(msg.message_id);
@@ -821,17 +780,19 @@ ${analytics?.favoriteQueries.length ? analytics.favoriteQueries.slice(0, 3).map(
         return;
       }
 
-      const popularText = popularQueries.map((item, i) => 
-        `${i + 1}. "${item.query}" (${item.count} раз)`
+      const favoritesText = userAnalytics.favoriteQueries.map((query: string, i: number) => 
+        `${i + 1}. "${query}"`
       ).join('\n');
 
-      const msg = await ctx.reply(`📊 *Популярные запросы*
+      const msg = await ctx.reply(`⭐ *Мои избранные*
 
-*Топ-10 популярных запросов:*
-${popularText}
+*Ваши избранные запросы:*
+${favoritesText}
 
-*Хотите попробовать один из них?*
-Просто скопируйте и отправьте любой запрос!`, {
+*Что дальше?*
+• Задать новый вопрос
+• Просмотреть историю поиска
+• Обратиться к помощи`, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
@@ -839,15 +800,16 @@ ${popularText}
           [Markup.button.callback("ℹ️ Помощь", "help")]
         ])
       });
+      
       if (userId) {
         const arr = lastBotMessages.get(userId) || [];
         arr.push(msg.message_id);
         lastBotMessages.set(userId, arr);
       }
     } catch (error) {
-      console.error("Error in popular_queries handler:", error);
+      console.error("Error in my_favorites handler:", error);
       try {
-        await ctx.answerCbQuery("❌ Ошибка при получении популярных запросов");
+        await ctx.answerCbQuery("❌ Ошибка при получении избранных");
       } catch (e) {
         console.error("Failed to answer callback query:", e);
       }

@@ -32,6 +32,11 @@ troubleshooting {TROUBLESHOOTING.md}
 launch ollama {ollama serve
                ollama run deepseek-r1}
 
+check all {ps aux | grep "ts-node" | grep -v grep}
+
+stop all {pkill -f 'ts-node'}
+
+dashboard {http://localhost:3001}
 
 
 
