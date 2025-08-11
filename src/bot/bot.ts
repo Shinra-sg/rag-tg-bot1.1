@@ -56,6 +56,51 @@ export function startBot() {
     }
   }
 
+  // Функция для обновления последнего сообщения с кнопками
+  async function updateLastMessageWithButtons(ctx: Context, text: string, buttons: any) {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    // Удаляем предыдущие сообщения, кроме последнего
+    if (lastBotMessages.has(userId)) {
+      const messagesToDelete = lastBotMessages.get(userId)!;
+      if (messagesToDelete.length > 1) {
+        // Удаляем все кроме последнего
+        for (let i = 0; i < messagesToDelete.length - 1; i++) {
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat!.id, messagesToDelete[i]);
+          } catch (e) {
+            // Игнорируем ошибки
+          }
+        }
+        // Оставляем только последнее сообщение
+        const lastMessageId = messagesToDelete[messagesToDelete.length - 1];
+        lastBotMessages.set(userId, [lastMessageId]);
+      }
+    }
+
+    // Обновляем последнее сообщение
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        lastBotMessages.get(userId)?.[0],
+        undefined,
+        text,
+        {
+          parse_mode: 'Markdown',
+          ...buttons
+        }
+      );
+    } catch (e) {
+      // Если не удалось обновить, отправляем новое сообщение
+      const newMsg = await ctx.reply(text, {
+        parse_mode: 'Markdown',
+        ...buttons
+      });
+      lastBotMessages.set(userId, [newMsg.message_id]);
+    }
+  }
+
   // Функция для периодической очистки системы
   async function scheduleCleanup() {
     // Очистка каждые 24 часа
@@ -106,14 +151,11 @@ export function startBot() {
         ["ℹ️ Помощь", "🤖 О проекте"]
       ]).resize()
     });
-    const userId = ctx.from?.id;
-    if (userId) {
-      lastBotMessages.set(userId, [msg.message_id]);
-    }
+    // НЕ сохраняем приветственное сообщение в lastBotMessages
+    // Оно будет удалено при следующем действии пользователя
   });
 
   bot.hears("Помощь", async (ctx: Context) => {
-    await deleteLastBotMessages(ctx);
     const helpMessage = `ℹ️ *Справка по использованию AI-помощника*
 
 *Как задать вопрос:*
@@ -135,21 +177,26 @@ export function startBot() {
 *Если не нашел ответ:*
 Обратитесь к администратору для уточнения запроса или добавления новых документов.`;
 
-    const msg = await ctx.reply(helpMessage, {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-        [Markup.button.callback("🤖 О проекте", "about")]
-      ])
-    });
+    const buttons = Markup.inlineKeyboard([
+      [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+      [Markup.button.callback("🤖 О проекте", "about")]
+    ]);
+
+    // Если есть последнее сообщение, обновляем его
     const userId = ctx.from?.id;
-    if (userId) {
-      lastBotMessages.set(userId, [msg.message_id]);
+    if (userId && lastBotMessages.has(userId)) {
+      await updateLastMessageWithButtons(ctx, helpMessage, buttons);
+    } else {
+      // Если нет последнего сообщения, отправляем новое
+      const msg = await ctx.reply(helpMessage, {
+        parse_mode: 'Markdown',
+        ...buttons
+      });
+      lastBotMessages.set(userId!, [msg.message_id]);
     }
   });
 
   bot.hears("О проекте", async (ctx: Context) => {
-    await deleteLastBotMessages(ctx);
     const aboutMessage = `🤖 *О проекте AI-помощника*
 
 *Назначение:*
@@ -171,21 +218,26 @@ export function startBot() {
 *Разработка:*
 Проект создан для повышения эффективности работы сотрудников и быстрого доступа к корпоративной информации.`;
 
-    const msg = await ctx.reply(aboutMessage, {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-        [Markup.button.callback("ℹ️ Помощь", "help")]
-      ])
-    });
+    const buttons = Markup.inlineKeyboard([
+      [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+      [Markup.button.callback("ℹ️ Помощь", "help")]
+    ]);
+
+    // Если есть последнее сообщение, обновляем его
     const userId = ctx.from?.id;
-    if (userId) {
-      lastBotMessages.set(userId, [msg.message_id]);
+    if (userId && lastBotMessages.has(userId)) {
+      await updateLastMessageWithButtons(ctx, aboutMessage, buttons);
+    } else {
+      // Если нет последнего сообщения, отправляем новое
+      const msg = await ctx.reply(aboutMessage, {
+        parse_mode: 'Markdown',
+        ...buttons
+      });
+      lastBotMessages.set(userId!, [msg.message_id]);
     }
   });
 
   bot.hears("Задать вопрос", async (ctx: Context) => {
-    await deleteLastBotMessages(ctx);
     const askMessage = `🔍 *Задайте ваш вопрос*
 
 Просто напишите ваш вопрос, и я найду релевантную информацию в корпоративных документах.
@@ -203,13 +255,19 @@ export function startBot() {
 
 *Готов к поиску!* 🚀`;
 
-    const msg = await ctx.reply(askMessage, {
-      parse_mode: 'Markdown',
-      ...Markup.removeKeyboard()
-    });
+    const buttons = Markup.removeKeyboard();
+    
+    // Если есть последнее сообщение, обновляем его
     const userId = ctx.from?.id;
-    if (userId) {
-      lastBotMessages.set(userId, [msg.message_id]);
+    if (userId && lastBotMessages.has(userId)) {
+      await updateLastMessageWithButtons(ctx, askMessage, buttons);
+    } else {
+      // Если нет последнего сообщения, отправляем новое
+      const msg = await ctx.reply(askMessage, {
+        parse_mode: 'Markdown',
+        ...buttons
+      });
+      lastBotMessages.set(userId!, [msg.message_id]);
     }
   });
 
@@ -229,32 +287,49 @@ export function startBot() {
     const messageText = ctx.message && "text" in ctx.message ? ctx.message.text : "";
     logAction("text_message", userId, { text: messageText.substring(0, 50) + "..." });
     
-    // Удаляем старые сообщения бота для этого пользователя
-    if (userId) {
-      if (lastBotMessages.has(userId)) {
-        console.log(`[${new Date().toISOString()}] 🗑️ Удаление предыдущих сообщений бота для пользователя ${userId} перед обработкой нового запроса`);
-        await deleteLastBotMessages(ctx);
+    // Удаляем все предыдущие сообщения бота, кроме последнего
+    if (userId && lastBotMessages.has(userId)) {
+      const messagesToDelete = lastBotMessages.get(userId)!;
+      if (messagesToDelete.length > 1) {
+        console.log(`[${new Date().toISOString()}] 🗑️ Удаление ${messagesToDelete.length - 1} старых сообщений для пользователя ${userId}`);
+        for (let i = 0; i < messagesToDelete.length - 1; i++) {
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat!.id, messagesToDelete[i]);
+          } catch (e) {
+            // Игнорируем ошибки
+          }
+        }
+        // Оставляем только последнее сообщение
+        const lastMessageId = messagesToDelete[messagesToDelete.length - 1];
+        lastBotMessages.set(userId, [lastMessageId]);
       }
     }
 
     const msg = ctx.message;
     if (!msg || !("text" in msg)) {
-      const errorMsg = await ctx.reply(`❌ *Ошибка ввода*
+      const errorText = `❌ *Ошибка ввода*
 
 Пожалуйста, отправьте текстовое сообщение с вашим вопросом.
 
 *Примеры вопросов:*
 • "Как настроить VPN?"
 • "Правила безопасности"
-• "Документы для отпуска"`, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-          [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")]
-        ])
-      });
-      if (userId) {
-        lastBotMessages.set(userId, [errorMsg.message_id]);
+• "Документы для отпуска"`;
+
+      const errorButtons = Markup.inlineKeyboard([
+        [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+        [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")]
+      ]);
+
+      // Обновляем последнее сообщение или отправляем новое
+      if (userId && lastBotMessages.has(userId)) {
+        await updateLastMessageWithButtons(ctx, errorText, errorButtons);
+      } else {
+        const errorMsg = await ctx.reply(errorText, {
+          parse_mode: 'Markdown',
+          ...errorButtons
+        });
+        lastBotMessages.set(userId!, [errorMsg.message_id]);
       }
       return;
     }
@@ -262,15 +337,28 @@ export function startBot() {
     const text = msg.text;
     const startTime = Date.now();
     
-    const processingMsg = await ctx.reply(`🔍 *Обрабатываю ваш запрос...*
+    // Показываем сообщение о обработке
+    const processingText = `🔍 *Обрабатываю ваш запрос...*
 
 *Запрос:* "${text}"
 
-⏳ Ищу релевантную информацию в документах...`, {
-      parse_mode: 'Markdown',
-      ...Markup.removeKeyboard()
-    });
-    const processingMsgId = processingMsg.message_id;
+⏳ Ищу релевантную информацию в документах...`;
+
+    const processingButtons = Markup.removeKeyboard();
+
+    // Обновляем последнее сообщение или отправляем новое
+    let processingMsgId: number;
+    if (userId && lastBotMessages.has(userId)) {
+      await updateLastMessageWithButtons(ctx, processingText, processingButtons);
+      processingMsgId = lastBotMessages.get(userId)![0];
+    } else {
+      const processingMsg = await ctx.reply(processingText, {
+        parse_mode: 'Markdown',
+        ...processingButtons
+      });
+      processingMsgId = processingMsg.message_id;
+      lastBotMessages.set(userId!, [processingMsgId]);
+    }
 
     try {
       // Проверяем доступ пользователя к документам
@@ -313,6 +401,11 @@ export function startBot() {
           const hybridResults = await hybridSearch(text, { maxResults: 5 });
           results = hybridResults;
           searchType = hybridResults[0]?.search_type || 'hybrid';
+          
+          //вот тут векторный поиск: const vectorResults = await vectorSearch(text, 5);
+          //results = vectorResults;
+          //searchType = 'vector';
+          
         } catch (e) {
           console.error("❌ Ошибка гибридного поиска, fallback на обычный:", e);
           const fallbackResults = await searchInstructionsWithAccess(text, username);
@@ -358,24 +451,11 @@ export function startBot() {
           console.error("❌ Ошибка генерации ответа ИИ:", e);
           answer = "Ошибка генерации ответа ИИ. Попробуйте переформулировать вопрос.";
         }
-        const sentMessages: number[] = [processingMsgId];
         
         // Сохраняем результаты поиска для пользователя
         if (userId) {
           userSearchResults.set(userId, results);
         }
-        
-        // Показываем краткую сводку источников
-        let summaryMsg;
-        try {
-          const summary = formatSummary(results);
-          summaryMsg = await ctx.reply(summary, { parse_mode: 'Markdown' });
-        } catch (error) {
-          console.log("⚠️ Ошибка Markdown в сводке, используем plain формат:", error);
-          const summary = formatSummaryPlain(results);
-          summaryMsg = await ctx.reply(summary);
-        }
-        sentMessages.push(summaryMsg.message_id);
         
         // Логируем аналитику
         const responseTime = Date.now() - startTime;
@@ -383,20 +463,39 @@ export function startBot() {
           await logSearch(userId, username, text, searchType, results.length, responseTime, true);
         }
 
-        const msg1 = await ctx.reply(answer, Markup.inlineKeyboard([
+        // Формируем полный ответ с источниками
+        let summary;
+        try {
+          summary = formatSummary(results);
+        } catch (error) {
+          console.log("⚠️ Ошибка Markdown в сводке, используем plain формат:", error);
+          summary = formatSummaryPlain(results);
+        }
+
+        const fullAnswer = `${answer}\n\n${summary}`;
+
+        // Кнопки для ответа
+        const answerButtons = Markup.inlineKeyboard([
           [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
           [Markup.button.callback("📄 Показать источники", "show_sources")],
           [Markup.button.callback("⭐ Добавить в избранное", `favorite_${text.substring(0, 20).replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '')}`)],
+          [Markup.button.callback("📋 История поиска", "search_history"), Markup.button.callback("📊 Популярные запросы", "popular_queries")],
           [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")],
           ...results.map((r) => [Markup.button.callback(`📁 Скачать ${r.filename.substring(0, 20)}`, `download_${r.filename.substring(0, 20).replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '')}`)])
-        ]));
-        sentMessages.push(msg1.message_id);
+        ]);
 
-        if (userId) {
-          lastBotMessages.set(userId, sentMessages);
+        // Обновляем последнее сообщение с ответом и кнопками
+        if (userId && lastBotMessages.has(userId)) {
+          await updateLastMessageWithButtons(ctx, fullAnswer, answerButtons);
+        } else {
+          const answerMsg = await ctx.reply(fullAnswer, {
+            parse_mode: 'Markdown',
+            ...answerButtons
+          });
+          lastBotMessages.set(userId!, [answerMsg.message_id]);
         }
       } else {
-        const fallbackMsg = await ctx.reply(`🔍 *Результаты поиска*
+        const noResultsText = `🔍 *Результаты поиска*
 
 *Запрос:* "${text}"
 
@@ -412,35 +511,49 @@ export function startBot() {
 *Что делать:*
 • Попробуйте переформулировать вопрос
 • Используйте другие ключевые слова
-• Обратитесь к администратору для добавления документов`, {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-            [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")]
-          ])
-        });
-        if (userId) {
-          lastBotMessages.set(userId, [fallbackMsg.message_id]);
+• Обратитесь к администратору для добавления документов`;
+
+        const noResultsButtons = Markup.inlineKeyboard([
+          [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+          [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")]
+        ]);
+
+        // Обновляем последнее сообщение с результатом "не найдено"
+        if (userId && lastBotMessages.has(userId)) {
+          await updateLastMessageWithButtons(ctx, noResultsText, noResultsButtons);
+        } else {
+          const noResultsMsg = await ctx.reply(noResultsText, {
+            parse_mode: 'Markdown',
+            ...noResultsButtons
+          });
+          lastBotMessages.set(userId!, [noResultsMsg.message_id]);
         }
       }
     } catch (error) {
       console.error("❌ Ошибка при обработке запроса:", error);
-      const errorMsg = await ctx.reply(`❌ *Произошла ошибка*
+      const errorText = `❌ *Произошла ошибка*
 
 При обработке вашего запроса произошла ошибка.
 
 *Что делать:*
 • Попробуйте повторить запрос
 • Обратитесь к администратору, если проблема повторяется
-• Используйте кнопку "ℹ️ Помощь" для получения справки`, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-          [Markup.button.callback("ℹ️ Помощь", "help")]
-        ])
-      });
-      if (userId) {
-        lastBotMessages.set(userId, [errorMsg.message_id]);
+• Используйте кнопку "ℹ️ Помощь" для получения справки`;
+
+      const errorButtons = Markup.inlineKeyboard([
+        [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+        [Markup.button.callback("ℹ️ Помощь", "help")]
+      ]);
+
+      // Обновляем последнее сообщение с ошибкой
+      if (userId && lastBotMessages.has(userId)) {
+        await updateLastMessageWithButtons(ctx, errorText, errorButtons);
+      } else {
+        const errorMsg = await ctx.reply(errorText, {
+          parse_mode: 'Markdown',
+          ...errorButtons
+        });
+        lastBotMessages.set(userId!, [errorMsg.message_id]);
       }
     }
   });
@@ -449,8 +562,8 @@ export function startBot() {
   bot.action("ask_question", async (ctx) => {
     try {
       logAction("ask_question", ctx.from?.id);
-      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
+      
       const askMessage = `🔍 *Задайте ваш вопрос*
 
 Просто напишите ваш вопрос, и я найду релевантную информацию в корпоративных документах.
@@ -468,13 +581,19 @@ export function startBot() {
 
 *Готов к поиску!* 🚀`;
 
-      const msg = await ctx.reply(askMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.removeKeyboard()
-      });
+      const buttons = Markup.removeKeyboard();
+      
+      // Если есть последнее сообщение, обновляем его
       const userId = ctx.from?.id;
-      if (userId) {
-        lastBotMessages.set(userId, [msg.message_id]);
+      if (userId && lastBotMessages.has(userId)) {
+        await updateLastMessageWithButtons(ctx, askMessage, buttons);
+      } else {
+        // Если нет последнего сообщения, отправляем новое
+        const msg = await ctx.reply(askMessage, {
+          parse_mode: 'Markdown',
+          ...buttons
+        });
+        lastBotMessages.set(userId!, [msg.message_id]);
       }
     } catch (error) {
       console.error("Error in ask_question handler:", error);
@@ -487,7 +606,6 @@ export function startBot() {
   });
   bot.action("help", async (ctx) => {
     try {
-      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const helpMessage = `ℹ️ *Справка по использованию AI-помощника*
 
@@ -510,16 +628,22 @@ export function startBot() {
 *Если не нашел ответ:*
 Обратитесь к администратору для уточнения запроса или добавления новых документов.`;
 
-      const msg = await ctx.reply(helpMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-          [Markup.button.callback("🤖 О проекте", "about")]
-        ])
-      });
+      const buttons = Markup.inlineKeyboard([
+        [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+        [Markup.button.callback("🤖 О проекте", "about")]
+      ]);
+
+      // Если есть последнее сообщение, обновляем его
       const userId = ctx.from?.id;
-      if (userId) {
-        lastBotMessages.set(userId, [msg.message_id]);
+      if (userId && lastBotMessages.has(userId)) {
+        await updateLastMessageWithButtons(ctx, helpMessage, buttons);
+      } else {
+        // Если нет последнего сообщения, отправляем новое
+        const msg = await ctx.reply(helpMessage, {
+          parse_mode: 'Markdown',
+          ...buttons
+        });
+        lastBotMessages.set(userId!, [msg.message_id]);
       }
     } catch (error) {
       console.error("Error in help handler:", error);
@@ -532,7 +656,6 @@ export function startBot() {
   });
   bot.action("about", async (ctx) => {
     try {
-      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const aboutMessage = `🤖 *О проекте AI-помощника*
 
@@ -555,21 +678,27 @@ export function startBot() {
 *Разработка:*
 Проект создан для повышения эффективности работы сотрудников и быстрого доступа к корпоративной информации.`;
 
-      const msg = await ctx.reply(aboutMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
-          [Markup.button.callback("ℹ️ Помощь", "help")]
-        ])
-      });
+      const buttons = Markup.inlineKeyboard([
+        [Markup.button.callback("🔍 Задать вопрос", "ask_question")],
+        [Markup.button.callback("ℹ️ Помощь", "help")]
+      ]);
+
+      // Если есть последнее сообщение, обновляем его
       const userId = ctx.from?.id;
-      if (userId) {
-        lastBotMessages.set(userId, [msg.message_id]);
+      if (userId && lastBotMessages.has(userId)) {
+        await updateLastMessageWithButtons(ctx, aboutMessage, buttons);
+      } else {
+        // Если нет последнего сообщения, отправляем новое
+        const msg = await ctx.reply(aboutMessage, {
+          parse_mode: 'Markdown',
+          ...buttons
+        });
+        lastBotMessages.set(userId!, [msg.message_id]);
       }
     } catch (error) {
       console.error("Error in about handler:", error);
       try {
-        await ctx.answerCbQuery("❌ Ошибка при показе информации");
+        await ctx.answerCbQuery("❌ Ошибка при показе информации о проекте");
       } catch (e) {
         console.error("Failed to answer callback query:", e);
       }
@@ -578,6 +707,7 @@ export function startBot() {
   
   bot.action("show_sources", async (ctx) => {
     try {
+      await deleteLastBotMessages(ctx);
       logAction("show_sources", ctx.from?.id);
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
@@ -590,9 +720,7 @@ export function startBot() {
           const formattedSources = formatSearchResults(results);
           const sourcesMsg = await ctx.reply(formattedSources, { parse_mode: 'Markdown' });
           if (userId) {
-            const arr = lastBotMessages.get(userId) || [];
-            arr.push(sourcesMsg.message_id);
-            lastBotMessages.set(userId, arr);
+            lastBotMessages.set(userId, [sourcesMsg.message_id]);
           }
         } catch (error) {
           // Если ошибка - используем plain версию
@@ -600,9 +728,7 @@ export function startBot() {
           const formattedSources = formatSearchResultsPlain(results);
           const sourcesMsg = await ctx.reply(formattedSources);
           if (userId) {
-            const arr = lastBotMessages.get(userId) || [];
-            arr.push(sourcesMsg.message_id);
-            lastBotMessages.set(userId, arr);
+            lastBotMessages.set(userId, [sourcesMsg.message_id]);
           }
         }
       } else {
@@ -621,11 +747,7 @@ export function startBot() {
             [Markup.button.callback("ℹ️ Помощь", "help")]
           ])
         });
-        if (userId) {
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(errorMsg.message_id);
-          lastBotMessages.set(userId, arr);
-        }
+        // НЕ сохраняем системные сообщения в lastBotMessages
       }
     } catch (error) {
       console.error("Error in show_sources handler:", error);
@@ -640,6 +762,7 @@ export function startBot() {
   // Обработка добавления в избранное
   bot.action(/^favorite_(.+)$/, async (ctx) => {
     try {
+      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
       if (!userId) return;
@@ -663,11 +786,7 @@ export function startBot() {
         ])
       });
       
-      if (userId) {
-        const arr = lastBotMessages.get(userId) || [];
-        arr.push(msg.message_id);
-        lastBotMessages.set(userId, arr);
-      }
+      // НЕ сохраняем системные сообщения в lastBotMessages
     } catch (error) {
       console.error("Error in favorite handler:", error);
       try {
@@ -681,6 +800,7 @@ export function startBot() {
   // Обработка скачивания документа
   bot.action(/^download_(.+)$/, async (ctx) => {
     try {
+      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
       if (!userId) return;
@@ -706,11 +826,7 @@ export function startBot() {
           ])
         });
         
-        if (userId) {
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(msg.message_id);
-          lastBotMessages.set(userId, arr);
-        }
+        // НЕ сохраняем системные сообщения в lastBotMessages
         return;
       }
       
@@ -733,11 +849,7 @@ export function startBot() {
         ])
       });
       
-      if (userId) {
-        const arr = lastBotMessages.get(userId) || [];
-        arr.push(msg.message_id);
-        lastBotMessages.set(userId, arr);
-      }
+      // НЕ сохраняем системные сообщения в lastBotMessages
     } catch (error) {
       console.error("Error in download handler:", error);
       try {
@@ -751,6 +863,7 @@ export function startBot() {
   // Обработка просмотра избранных запросов
   bot.action("my_favorites", async (ctx) => {
     try {
+      await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
       if (!userId) return;
@@ -772,11 +885,7 @@ export function startBot() {
           ])
         });
         
-        if (userId) {
-          const arr = lastBotMessages.get(userId) || [];
-          arr.push(msg.message_id);
-          lastBotMessages.set(userId, arr);
-        }
+        // НЕ сохраняем системные сообщения в lastBotMessages
         return;
       }
 
@@ -801,15 +910,134 @@ ${favoritesText}
         ])
       });
       
-      if (userId) {
-        const arr = lastBotMessages.get(userId) || [];
-        arr.push(msg.message_id);
-        lastBotMessages.set(userId, arr);
-      }
+      // НЕ сохраняем системные сообщения в lastBotMessages
     } catch (error) {
       console.error("Error in my_favorites handler:", error);
       try {
         await ctx.answerCbQuery("❌ Ошибка при получении избранных");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
+    }
+  });
+
+  // Обработка просмотра истории поиска
+  bot.action("search_history", async (ctx) => {
+    try {
+      await deleteLastBotMessages(ctx);
+      await ctx.answerCbQuery();
+      const userId = ctx.from?.id;
+      if (!userId) return;
+      
+      // Получаем историю поиска пользователя
+      const history = await getUserSearchHistory(userId, 10);
+      if (!history || history.length === 0) {
+        const msg = await ctx.reply(`📋 *История поиска*
+
+У вас пока нет истории поиска.
+
+*Как появится история:*
+• Задайте вопрос и получите ответ
+• Ваши поисковые запросы будут сохранены здесь`, {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("⭐ Мои избранные", "my_favorites")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+        return;
+      }
+
+      const historyText = history.map((item, i) => 
+        `${i + 1}. "${item.query}" (${item.resultsCount} результатов, ${item.searchType})`
+      ).join('\n');
+
+      const msg = await ctx.reply(`📋 *История поиска*
+
+*Ваши последние запросы:*
+${historyText}
+
+*Что дальше?*
+• Задать новый вопрос
+• Просмотреть избранные
+• Обратиться к помощи`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+          [Markup.button.callback("⭐ Мои избранные", "my_favorites")],
+          [Markup.button.callback("ℹ️ Помощь", "help")]
+        ])
+      });
+      
+      // НЕ сохраняем системные сообщения в lastBotMessages
+    } catch (error) {
+      console.error("Error in search_history handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при получении истории");
+      } catch (e) {
+        console.error("Failed to answer callback query:", e);
+      }
+    }
+  });
+
+  // Обработка просмотра популярных запросов
+  bot.action("popular_queries", async (ctx) => {
+    try {
+      await deleteLastBotMessages(ctx);
+      await ctx.answerCbQuery();
+      const userId = ctx.from?.id;
+      if (!userId) return;
+      
+      // Получаем популярные запросы
+      const popular = await getPopularQueries(10);
+      if (!popular || popular.length === 0) {
+        const msg = await ctx.reply(`📊 *Популярные запросы*
+
+Пока нет данных о популярных запросах.
+
+*Как появятся данные:*
+• Пользователи задают вопросы
+• Система отслеживает популярность
+• Здесь будут показаны самые частые запросы`, {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("📋 История поиска", "search_history")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+        return;
+      }
+
+      const popularText = popular.map((item, i) => 
+        `${i + 1}. "${item.query}" (${item.count} раз)`
+      ).join('\n');
+
+      const msg = await ctx.reply(`📊 *Популярные запросы*
+
+*Самые частые вопросы:*
+${popularText}
+
+*Что дальше?*
+• Задать новый вопрос
+• Просмотреть историю
+• Обратиться к помощи`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+          [Markup.button.callback("📋 История поиска", "search_history")],
+          [Markup.button.callback("ℹ️ Помощь", "help")]
+        ])
+      });
+      
+      // НЕ сохраняем системные сообщения в lastBotMessages
+    } catch (error) {
+      console.error("Error in popular_queries handler:", error);
+      try {
+        await ctx.answerCbQuery("❌ Ошибка при получении популярных запросов");
       } catch (e) {
         console.error("Failed to answer callback query:", e);
       }

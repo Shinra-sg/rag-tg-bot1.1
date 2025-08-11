@@ -1,45 +1,23 @@
 #!/usr/bin/env python3
-"""
-Парсер для Word файлов (.docx, .doc)
-"""
-
 import sys
 import json
-import os
 from docx import Document
-from datetime import datetime
+import os
 
-def parse_word_file(file_path):
-    """Парсит Word файл и возвращает содержимое в JSON формате"""
+def parse_word(file_path):
+    """Парсит Word файл и возвращает текст и метаданные"""
     try:
         # Загружаем документ
         doc = Document(file_path)
         
         content_parts = []
-        metadata = {
-            "title": os.path.basename(file_path),
-            "author": None,
-            "pages": None,
-            "created": None,
-            "modified": None
-        }
         
-        # Получаем метаданные
-        if hasattr(doc.core_properties, 'author') and doc.core_properties.author:
-            metadata["author"] = doc.core_properties.author
-        
-        if hasattr(doc.core_properties, 'created') and doc.core_properties.created:
-            metadata["created"] = doc.core_properties.created.isoformat()
-        
-        if hasattr(doc.core_properties, 'modified') and doc.core_properties.modified:
-            metadata["modified"] = doc.core_properties.modified.isoformat()
-        
-        # Обрабатываем параграфы
+        # Извлекаем текст из параграфов
         for paragraph in doc.paragraphs:
             if paragraph.text.strip():
                 content_parts.append(paragraph.text)
         
-        # Обрабатываем таблицы
+        # Извлекаем текст из таблиц
         for table in doc.tables:
             content_parts.append("=== Таблица ===")
             for row in table.rows:
@@ -48,12 +26,25 @@ def parse_word_file(file_path):
                     content_parts.append(row_text)
             content_parts.append("")
         
-        # Объединяем содержимое
         content = "\n".join(content_parts)
         
-        # Примерная оценка количества страниц (1 страница ≈ 500 символов)
-        if content:
-            metadata["pages"] = max(1, len(content) // 500)
+        # Получаем метаданные
+        metadata = {
+            "title": os.path.basename(file_path),
+            "author": None,
+            "pages": len(doc.paragraphs) // 20 + 1,  # Примерная оценка страниц
+            "created": None,
+            "modified": None
+        }
+        
+        # Пытаемся получить метаданные из свойств документа
+        if hasattr(doc, 'core_properties'):
+            if doc.core_properties.author:
+                metadata["author"] = doc.core_properties.author
+            if doc.core_properties.created:
+                metadata["created"] = doc.core_properties.created.isoformat()
+            if doc.core_properties.modified:
+                metadata["modified"] = doc.core_properties.modified.isoformat()
         
         return {
             "content": content,
@@ -62,8 +53,8 @@ def parse_word_file(file_path):
         
     except Exception as e:
         return {
-            "content": f"Ошибка при обработке Word файла: {str(e)}",
-            "metadata": {}
+            "content": f"Ошибка парсинга Word файла: {str(e)}",
+            "metadata": {"title": os.path.basename(file_path)}
         }
 
 if __name__ == "__main__":
@@ -72,10 +63,9 @@ if __name__ == "__main__":
         sys.exit(1)
     
     file_path = sys.argv[1]
-    
     if not os.path.exists(file_path):
         print(json.dumps({"error": f"Файл не найден: {file_path}"}))
         sys.exit(1)
     
-    result = parse_word_file(file_path)
-    print(json.dumps(result, ensure_ascii=False, indent=2)) 
+    result = parse_word(file_path)
+    print(json.dumps(result, ensure_ascii=False, default=str)) 

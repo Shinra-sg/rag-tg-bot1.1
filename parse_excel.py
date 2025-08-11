@@ -7,19 +7,18 @@ import sys
 import json
 import pandas as pd
 from openpyxl import load_workbook
-from datetime import datetime
 import os
 
-def parse_excel_file(file_path):
-    """Парсит Excel файл и возвращает содержимое в JSON формате"""
+def parse_excel(file_path):
+    """Парсит Excel файл и возвращает текст и метаданные"""
     try:
         # Загружаем файл
         workbook = load_workbook(file_path, data_only=True)
         
         content_parts = []
         metadata = {
-            "sheets": len(workbook.sheetnames),
             "title": os.path.basename(file_path),
+            "sheets": len(workbook.sheetnames),
             "created": None,
             "modified": None
         }
@@ -37,15 +36,22 @@ def parse_excel_file(file_path):
             
             content_parts.append("")  # Пустая строка между листами
         
-        # Объединяем содержимое
         content = "\n".join(content_parts)
         
-        # Получаем метаданные
-        if hasattr(workbook, 'properties'):
-            if workbook.properties.created:
-                metadata["created"] = workbook.properties.created.isoformat()
-            if workbook.properties.modified:
-                metadata["modified"] = workbook.properties.modified.isoformat()
+        # Если контент пустой, пробуем pandas
+        if not content.strip():
+            try:
+                df = pd.read_excel(file_path, sheet_name=None)
+                content_parts = []
+                
+                for sheet_name, sheet_df in df.items():
+                    content_parts.append(f"=== Лист: {sheet_name} ===")
+                    content_parts.append(sheet_df.to_string(index=False))
+                    content_parts.append("")
+                
+                content = "\n".join(content_parts)
+            except Exception as e:
+                content = f"Ошибка чтения Excel файла: {str(e)}"
         
         return {
             "content": content,
@@ -54,8 +60,8 @@ def parse_excel_file(file_path):
         
     except Exception as e:
         return {
-            "content": f"Ошибка при обработке Excel файла: {str(e)}",
-            "metadata": {}
+            "content": f"Ошибка парсинга Excel файла: {str(e)}",
+            "metadata": {"title": os.path.basename(file_path)}
         }
 
 if __name__ == "__main__":
@@ -64,10 +70,9 @@ if __name__ == "__main__":
         sys.exit(1)
     
     file_path = sys.argv[1]
-    
     if not os.path.exists(file_path):
         print(json.dumps({"error": f"Файл не найден: {file_path}"}))
         sys.exit(1)
     
-    result = parse_excel_file(file_path)
-    print(json.dumps(result, ensure_ascii=False, indent=2)) 
+    result = parse_excel(file_path)
+    print(json.dumps(result, ensure_ascii=False, default=str)) 

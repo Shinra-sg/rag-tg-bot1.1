@@ -30,8 +30,8 @@
     "setup:analytics": "ts-node src/utils/setupAnalytics.ts",
     "test:analytics": "ts-node -e \"require('./src/utils/analytics').getSearchAnalytics().then(console.log).catch(console.error)\"",
     "test:hybrid-search": "ts-node -e \"require('./src/utils/hybridSearch').hybridSearch('тест').then(console.log).catch(console.error)\"",
-    "test:new-formats": "ts-node -e \"require('./src/utils/documentParsers').getSupportedFormats().then(console.log).catch(console.error)\"",
-    "install:python-deps": "pip3 install openpyxl python-docx python-pptx pandas",
+    "test:new-formats": "ts-node -e \"console.log(require('./src/utils/documentParsers').getSupportedFormats())\"",
+    "install:python-deps": "pip3 install -r requirements.txt",
     "test:new-features": "ts-node src/utils/testNewFeatures.ts"
   },
   "dependencies": {

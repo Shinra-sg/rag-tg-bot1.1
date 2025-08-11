@@ -498,8 +498,17 @@ export function startAdminBot() {
 
     const file = ctx.message.document;
     const ext = path.extname(file.file_name || "").toLowerCase();
-    if (ext !== ".pdf" && ext !== ".md") {
-      await ctx.reply("⛔️ Поддерживаются только PDF и Markdown (.md) файлы.");
+    
+    // Поддерживаемые форматы
+    const supportedFormats = ['.pdf', '.md', '.txt', '.xlsx', '.xls', '.docx', '.doc', '.pptx', '.ppt'];
+    
+    if (!supportedFormats.includes(ext)) {
+      await ctx.reply(`⛔️ Поддерживаются только следующие форматы:\n\n` +
+        `📄 Документы: PDF, Markdown (.md), TXT\n` +
+        `📊 Таблицы: Excel (.xlsx, .xls)\n` +
+        `📝 Тексты: Word (.docx, .doc)\n` +
+        `📊 Презентации: PowerPoint (.pptx, .ppt)\n\n` +
+        `Ваш файл: ${file.file_name} (${ext})`);
       return;
     }
 
@@ -520,7 +529,7 @@ export function startAdminBot() {
     const buttons = categories.map((c: any) => [c.name]);
     buttons.push(["+ Создать новую категорию"]);
     await ctx.reply(
-      "Выберите категорию для документа или создайте новую:",
+      `✅ Файл "${file.file_name}" загружен!\n\nВыберите категорию для документа или создайте новую:`,
       Markup.keyboard(buttons).oneTime().resize()
     );
   });

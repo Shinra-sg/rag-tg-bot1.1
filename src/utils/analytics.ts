@@ -115,26 +115,34 @@ export async function logSearch(
       [userId, username, query, searchType, resultsCount, responseTimeMs, success]
     );
 
-    // Обновляем популярные запросы
-    const queryHash = Buffer.from(query.toLowerCase().trim()).toString('base64').slice(0, 64);
-    await pool.query(
-      `INSERT INTO popular_queries (query_hash, query_text, search_count, last_used)
-       VALUES ($1, $2, 1, CURRENT_TIMESTAMP)
-       ON CONFLICT (query_hash) 
-       DO UPDATE SET 
-         search_count = popular_queries.search_count + 1,
-         last_used = CURRENT_TIMESTAMP`,
-      [queryHash, query.trim()]
-    );
+    // Фильтруем системные команды из популярных запросов
+    const trimmedQuery = query.trim();
+    const isSystemCommand = /^\/(start|help|about|ask_question|search_history|my_favorites|popular_queries|show_sources|download_|favorite_)/.test(trimmedQuery);
+    
+    // Обновляем популярные запросы только для не-системных команд
+    if (!isSystemCommand && trimmedQuery.length > 0) {
+      const queryHash = Buffer.from(trimmedQuery.toLowerCase()).toString('base64').slice(0, 64);
+      await pool.query(
+        `INSERT INTO popular_queries (query_hash, query_text, search_count, last_used)
+         VALUES ($1, $2, 1, CURRENT_TIMESTAMP)
+         ON CONFLICT (query_hash) 
+         DO UPDATE SET 
+           search_count = popular_queries.search_count + 1,
+           last_used = CURRENT_TIMESTAMP`,
+        [queryHash, trimmedQuery]
+      );
+    }
 
-    // Добавляем в историю пользователя
-    await pool.query(
-      `INSERT INTO user_search_history (user_id, query_text, results_count, search_type)
-       VALUES ($1, $2, $3, $4)`,
-      [userId, query.trim(), resultsCount, searchType]
-    );
+    // Добавляем в историю пользователя только для не-системных команд
+    if (!isSystemCommand && trimmedQuery.length > 0) {
+      await pool.query(
+        `INSERT INTO user_search_history (user_id, query_text, results_count, search_type)
+         VALUES ($1, $2, $3, $4)`,
+        [userId, trimmedQuery, resultsCount, searchType]
+      );
+    }
 
-    console.log(`📊 Логирован поиск: пользователь ${userId}, запрос "${query}", тип ${searchType}, результатов ${resultsCount}`);
+    console.log(`📊 Логирован поиск: пользователь ${userId}, запрос "${query}", тип ${searchType}, результатов ${resultsCount}${isSystemCommand ? ' (системная команда)' : ''}`);
   } catch (error) {
     console.error("❌ Ошибка логирования поиска:", error);
   }

@@ -1,7 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { parsePDF } from "./pdfParser";
-import { parseMarkdown } from "./mdParser";
+import { parseDocument, getSupportedFormats, isSupportedFormat } from "../utils/documentParsers";
 import pool from "../utils/db";
 
 process.on('uncaughtException', (err) => {
@@ -38,44 +37,82 @@ async function parseDocuments() {
     console.log("📂 Найдено файлов:", files);
 
     for (const file of files) {
-      const ext = path.extname(file).toLowerCase();
       const fullPath = path.join(RAW_DIR, file);
-      let text = "";
-      let type = "";
-      let sourceRefs: string[] = [];
+      const ext = path.extname(file).toLowerCase();
+      
+      // Проверяем, поддерживается ли формат
+      if (!isSupportedFormat(fullPath)) {
+        console.log(`⏭️ Пропускаю неподдерживаемый файл: ${file} (${ext})`);
+        continue;
+      }
 
       try {
-        if (ext === ".pdf") {
-          console.log(`📄 Обрабатываю PDF: ${file}`);
-          text = await parsePDF(fullPath);
-          type = "pdf";
-          // Для PDF source_ref можно сделать по страницам, если есть разметка, иначе пусто
-        } else if (ext === ".md") {
-          console.log(`📝 Обрабатываю Markdown: ${file}`);
-          const lines = await parseMarkdown(fullPath);
-          text = lines.join("\n");
-          type = "md";
-        } else {
-          console.log(`⏭️ Пропускаю файл: ${file}`);
-          continue;
-        }
+        console.log(`📄 Обрабатываю файл: ${file} (${ext})`);
+        
+        // Используем универсальный парсер
+        const parsedDoc = await parseDocument(fullPath);
+        const text = parsedDoc.content;
+        
+        // Определяем тип файла
+        let type = ext.slice(1); // убираем точку
+        if (ext === '.md') type = 'markdown';
+        if (ext === '.txt') type = 'text';
+        if (['.xlsx', '.xls'].includes(ext)) type = 'excel';
+        if (['.docx', '.doc'].includes(ext)) type = 'word';
+        if (['.pptx', '.ppt'].includes(ext)) type = 'powerpoint';
 
         // Разбиваем на чанки
         const chunks = splitTextToChunks(text, 400, 50);
+        console.log(`📊 Разбито на ${chunks.length} чанков`);
+        
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
-          const source_ref = type === "md" ? `абзац ${i + 1}` : `стр. ${i + 1}`;
+          let sourceRef = '';
+          
+          // Определяем source_ref в зависимости от типа файла
+          switch (type) {
+            case 'markdown':
+              sourceRef = `абзац ${i + 1}`;
+              break;
+            case 'excel':
+              sourceRef = `лист ${i + 1}`;
+              break;
+            case 'word':
+              sourceRef = `страница ${i + 1}`;
+              break;
+            case 'powerpoint':
+              sourceRef = `слайд ${i + 1}`;
+              break;
+            case 'pdf':
+              sourceRef = `стр. ${i + 1}`;
+              break;
+            default:
+              sourceRef = `часть ${i + 1}`;
+          }
+          
           // Сохраняем в базу
           await pool.query(
             "INSERT INTO instruction_chunks (filename, chunk_index, content, type, source_ref) VALUES ($1, $2, $3, $4, $5)",
-            [file, i, chunk, type, source_ref]
+            [file, i, chunk, type, sourceRef]
           );
         }
 
-        // Старое сохранение в файл (можно оставить для отладки)
+        // Сохраняем в файл для отладки
         const outPath = path.join(PARSED_DIR, `${file}.txt`);
         fs.writeFileSync(outPath, text);
         console.log(`✅ Сохранено в файл: ${outPath}`);
+        
+        // Логируем метаданные если есть
+        if (parsedDoc.metadata) {
+          console.log(`📋 Метаданные:`, {
+            title: parsedDoc.metadata.title,
+            author: parsedDoc.metadata.author,
+            pages: parsedDoc.metadata.pages,
+            created: parsedDoc.metadata.created,
+            modified: parsedDoc.metadata.modified
+          });
+        }
+        
       } catch (error) {
         console.error(`❌ Ошибка при обработке файла ${file}:`, error);
         if (error instanceof Error && error.stack) {
@@ -83,6 +120,8 @@ async function parseDocuments() {
         }
       }
     }
+    
+    console.log("✅ Парсер завершен");
   } catch (err) {
     console.error("❌ Фатальная ошибка при парсинге документов:", err);
     if (err instanceof Error && err.stack) {

@@ -6,8 +6,17 @@ async function startWithCleanup() {
   try {
     console.log("🚀 Запуск системы с автоматической очисткой...\n");
     
+    // 0. Установка Python зависимостей
+    console.log("0. Установка Python зависимостей...");
+    try {
+      execSync("npm run install:python-deps", { stdio: 'inherit' });
+      console.log("✅ Python зависимости установлены");
+    } catch (e) {
+      console.log("⚠️ Ошибка установки Python зависимостей (возможно уже установлены):", e);
+    }
+    
     // 1. Запуск PostgreSQL
-    console.log("1. Запуск PostgreSQL...");
+    console.log("\n1. Запуск PostgreSQL...");
     try {
       execSync("brew services start postgresql@14", { stdio: 'inherit' });
       console.log("✅ PostgreSQL запущен");
