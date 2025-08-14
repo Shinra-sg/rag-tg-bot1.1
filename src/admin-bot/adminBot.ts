@@ -500,14 +500,15 @@ export function startAdminBot() {
     const ext = path.extname(file.file_name || "").toLowerCase();
     
     // Поддерживаемые форматы
-    const supportedFormats = ['.pdf', '.md', '.txt', '.xlsx', '.xls', '.docx', '.doc', '.pptx', '.ppt'];
+    const supportedFormats = ['.pdf', '.md', '.txt', '.xlsx', '.xls', '.docx', '.doc', '.pptx', '.ppt', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'];
     
     if (!supportedFormats.includes(ext)) {
       await ctx.reply(`⛔️ Поддерживаются только следующие форматы:\n\n` +
         `📄 Документы: PDF, Markdown (.md), TXT\n` +
         `📊 Таблицы: Excel (.xlsx, .xls)\n` +
         `📝 Тексты: Word (.docx, .doc)\n` +
-        `📊 Презентации: PowerPoint (.pptx, .ppt)\n\n` +
+        `📊 Презентации: PowerPoint (.pptx, .ppt)\n` +
+        `🖼️ Изображения: JPG, PNG, BMP, TIFF, WebP\n\n` +
         `Ваш файл: ${file.file_name} (${ext})`);
       return;
     }
@@ -532,6 +533,66 @@ export function startAdminBot() {
       `✅ Файл "${file.file_name}" загружен!\n\nВыберите категорию для документа или создайте новую:`,
       Markup.keyboard(buttons).oneTime().resize()
     );
+  });
+
+  // Обработчик для изображений (фото)
+  bot.on("photo", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    if (!ctx.message || !('photo' in ctx.message)) return;
+    const state = uploadStates.get(ctx.from!.id);
+    if (!state || state.step !== "awaiting_file") return;
+
+    const photos = ctx.message.photo;
+    if (!photos || photos.length === 0) {
+      await ctx.reply("❌ Изображение не найдено.");
+      return;
+    }
+
+    // Берем самое большое изображение (лучшее качество)
+    const photo = photos[photos.length - 1];
+    const fileId = photo.file_id;
+    const fileSize = photo.file_size || 0;
+
+    console.log(`🖼️ Получено изображение (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
+
+    // Проверяем размер файла (максимум 20MB для изображений)
+    if (fileSize > 20 * 1024 * 1024) {
+      await ctx.reply("❌ Изображение слишком большое. Максимальный размер: 20MB");
+      return;
+    }
+
+    try {
+      // Скачиваем файл
+      const fileLink = await ctx.telegram.getFileLink(fileId);
+      const rawDir = path.join(__dirname, "../data/raw");
+      if (!fs.existsSync(rawDir)) fs.mkdirSync(rawDir, { recursive: true });
+      
+      const fileName = `image_${Date.now()}.jpg`; // Telegram обычно возвращает JPG
+      const filePath = path.join(rawDir, fileName);
+      
+      const res = await fetch(fileLink.href);
+      const buffer = await res.arrayBuffer();
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+
+      console.log(`💾 Изображение сохранено: ${filePath}`);
+
+      uploadStates.set(ctx.from!.id, { step: "awaiting_category", filename: fileName, filePath });
+
+      // Получаем список категорий первого уровня
+      const catRes = await pool.query("SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY name");
+      const categories = catRes.rows;
+      const buttons = categories.map((c: any) => [c.name]);
+      buttons.push(["+ Создать новую категорию"]);
+      
+      await ctx.reply(
+        `✅ Изображение загружено!\n\n🖼️ Файл будет обработан с помощью OCR для извлечения текста.\n\nВыберите категорию для изображения или создайте новую:`,
+        Markup.keyboard(buttons).oneTime().resize()
+      );
+
+    } catch (error) {
+      console.error("❌ Ошибка при обработке изображения:", error);
+      await ctx.reply(`❌ Ошибка при обработке изображения: ${error}`);
+    }
   });
 
   // --- Удаление документа ---

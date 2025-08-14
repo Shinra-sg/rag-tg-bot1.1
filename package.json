@@ -31,6 +31,10 @@
     "test:analytics": "ts-node -e \"require('./src/utils/analytics').getSearchAnalytics().then(console.log).catch(console.error)\"",
     "test:hybrid-search": "ts-node -e \"require('./src/utils/hybridSearch').hybridSearch('тест').then(console.log).catch(console.error)\"",
     "test:new-formats": "ts-node -e \"console.log(require('./src/utils/documentParsers').getSupportedFormats())\"",
+    "test:ocr": "ts-node src/utils/testOCR.ts",
+    "test:ocr-integration": "ts-node src/utils/testOCRIntegration.ts",
+    "test:download": "ts-node src/utils/testDocumentDownload.ts",
+    "test:download-index": "ts-node src/utils/testDownloadWithIndex.ts",
     "install:python-deps": "pip3 install -r requirements.txt",
     "test:new-features": "ts-node src/utils/testNewFeatures.ts"
   },

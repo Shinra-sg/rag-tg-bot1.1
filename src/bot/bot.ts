@@ -14,6 +14,15 @@ import {
   getPopularQueries 
 } from "../utils/analytics";
 import { performFullCleanup, getDatabaseStats } from "../utils/cleanup";
+import { 
+  getDocumentByOriginalName, 
+  documentFileExists, 
+  getDocumentFileSize, 
+  formatFileSize, 
+  getMimeType,
+  createDownloadableCopy,
+  cleanupTempFiles
+} from "../utils/documentDownload";
 
 export function startBot() {
   const token = process.env.BOT_TOKEN;
@@ -455,6 +464,10 @@ export function startBot() {
         // Сохраняем результаты поиска для пользователя
         if (userId) {
           userSearchResults.set(userId, results);
+          console.log(`💾 Сохранены результаты поиска для пользователя ${userId}: ${results.length} документов`);
+          results.forEach((r, i) => {
+            console.log(`  [${i}] ${r.filename}`);
+          });
         }
         
         // Логируем аналитику
@@ -481,7 +494,7 @@ export function startBot() {
           [Markup.button.callback("⭐ Добавить в избранное", `favorite_${text.substring(0, 20).replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '')}`)],
           [Markup.button.callback("📋 История поиска", "search_history"), Markup.button.callback("📊 Популярные запросы", "popular_queries")],
           [Markup.button.callback("ℹ️ Помощь", "help"), Markup.button.callback("🤖 О проекте", "about")],
-          ...results.map((r) => [Markup.button.callback(`📁 Скачать ${r.filename.substring(0, 20)}`, `download_${r.filename.substring(0, 20).replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '')}`)])
+          ...results.map((r, index) => [Markup.button.callback(`📁 Скачать ${r.filename.substring(0, 20)}`, `download_${index}`)])
         ]);
 
         // Обновляем последнее сообщение с ответом и кнопками
@@ -798,28 +811,29 @@ export function startBot() {
   });
 
   // Обработка скачивания документа
-  bot.action(/^download_(.+)$/, async (ctx) => {
+  bot.action(/^download_(\d+)$/, async (ctx) => {
     try {
       await deleteLastBotMessages(ctx);
       await ctx.answerCbQuery();
       const userId = ctx.from?.id;
       if (!userId) return;
       
-      const filename = ctx.match[1];
+      const index = parseInt(ctx.match[1]);
       
-      // Проверяем доступ к документу
-      const username = ctx.from?.username;
-      const hasAccess = username ? await hasAnyAccess(username) : false;
-      if (!hasAccess) {
-        const msg = await ctx.reply(`⛔️ *Доступ ограничен*
+      console.log(`🔍 Попытка скачивания документа с индексом ${index} для пользователя ${userId}`);
+      
+      // Получаем результаты поиска для пользователя
+      const userResults = userSearchResults.get(userId);
+      if (!userResults || !userResults[index]) {
+        console.log(`❌ Результаты поиска не найдены для пользователя ${userId}, индекс ${index}`);
+        console.log(`📊 Доступные результаты:`, userResults ? userResults.length : 0);
+        const msg = await ctx.reply(`❌ Ошибка при скачивании
 
-У вас нет доступа к документу "${filename}".
+Не удалось найти документ для скачивания.
 
-*Для получения доступа:*
-• Обратитесь к администратору
-• Укажите причину необходимости доступа
-• Администратор рассмотрит ваш запрос`, {
-          parse_mode: 'Markdown',
+Возможные причины:
+• Результаты поиска устарели
+• Попробуйте выполнить поиск заново`, {
           ...Markup.inlineKeyboard([
             [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
             [Markup.button.callback("ℹ️ Помощь", "help")]
@@ -830,26 +844,149 @@ export function startBot() {
         return;
       }
       
-      // Здесь должна быть логика скачивания документа
-      const msg = await ctx.reply(`📁 *Скачивание документа*
-
-Документ "${filename}" готов к скачиванию.
-
-*Примечание:* Функция скачивания находится в разработке.
-
-*Что дальше?*
-• Задать новый вопрос
-• Просмотреть другие документы
-• Обратиться к помощи`, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
-          [Markup.button.callback("📄 Показать источники", "show_sources")],
-          [Markup.button.callback("ℹ️ Помощь", "help")]
-        ])
-      });
+      const result = userResults[index];
+      const filename = result.filename;
       
-      // НЕ сохраняем системные сообщения в lastBotMessages
+      console.log(`✅ Найден документ для скачивания: ${filename}`);
+      
+      // Проверяем доступ к документу
+      const username = ctx.from?.username;
+      const hasAccess = username ? await hasAnyAccess(username) : false;
+      if (!hasAccess) {
+        const msg = await ctx.reply(`⛔️ Доступ ограничен
+
+У вас нет доступа к документу "${filename}".
+
+Для получения доступа:
+• Обратитесь к администратору
+• Укажите причину необходимости доступа
+• Администратор рассмотрит ваш запрос`, {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+        return;
+      }
+      
+      // Получаем информацию о документе
+      const documentInfo = await getDocumentByOriginalName(filename);
+      if (!documentInfo) {
+        const msg = await ctx.reply(`❌ Документ не найден
+
+Документ "${filename}" не найден в базе данных.
+
+Возможные причины:
+• Документ был удален
+• Ошибка в названии документа
+• Проблема с базой данных`, {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+        return;
+      }
+      
+      // Проверяем существование файла
+      if (!documentFileExists(documentInfo)) {
+        const msg = await ctx.reply(`❌ Файл не найден
+
+Документ "${filename}" найден в базе данных, но файл отсутствует на сервере.
+
+Возможные причины:
+• Файл был перемещен или удален
+• Проблема с правами доступа
+• Ошибка в пути к файлу`, {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+        return;
+      }
+      
+      // Получаем размер файла
+      const fileSize = getDocumentFileSize(documentInfo);
+      const formattedSize = formatFileSize(fileSize);
+      
+      // Создаем временную копию для скачивания
+      const tempPath = createDownloadableCopy(documentInfo);
+      if (!tempPath) {
+        const msg = await ctx.reply(`❌ Ошибка при подготовке файла
+
+Не удалось подготовить файл "${filename}" для скачивания.
+
+Возможные причины:
+• Недостаточно места на диске
+• Проблема с правами доступа
+• Ошибка при копировании файла`, {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+        return;
+      }
+      
+      // Отправляем файл
+      try {
+        await ctx.replyWithDocument({
+          source: tempPath,
+          filename: documentInfo.original_name
+        }, {
+          caption: `📁 Документ готов к скачиванию
+
+Информация о файле:
+• Название: ${documentInfo.original_name}
+• Размер: ${formattedSize}
+• Тип: ${documentInfo.type}
+• Категория: ${documentInfo.category || 'Не указана'}
+• Загружен: ${new Date(documentInfo.uploaded_at).toLocaleString()}
+
+Примечание: Файл будет автоматически удален через час.`,
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("📄 Показать источники", "show_sources")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        
+        console.log(`✅ Документ "${documentInfo.original_name}" успешно отправлен пользователю ${userId}`);
+        
+        // Запускаем очистку временных файлов
+        setTimeout(() => {
+          cleanupTempFiles();
+        }, 1000);
+        
+      } catch (sendError) {
+        console.error('Ошибка при отправке файла:', sendError);
+        
+        const msg = await ctx.reply(`❌ Ошибка при отправке файла
+
+Не удалось отправить файл "${filename}".
+
+Возможные причины:
+• Файл слишком большой (максимум 50MB)
+• Проблема с сетью
+• Ошибка Telegram API`, {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔍 Новый вопрос", "ask_question")],
+            [Markup.button.callback("ℹ️ Помощь", "help")]
+          ])
+        });
+        
+        // НЕ сохраняем системные сообщения в lastBotMessages
+      }
+      
     } catch (error) {
       console.error("Error in download handler:", error);
       try {

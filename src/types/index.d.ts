@@ -105,4 +105,60 @@ declare module '../utils/documentParsers' {
   export function parseDocument(filePath: string): Promise<ParsedDocument>;
   export function getSupportedFormats(): string[];
   export function isSupportedFormat(filePath: string): boolean;
+  export function isImageFile(filePath: string): boolean;
+}
+
+declare module '../utils/ocrParser' {
+  export interface OCRResult {
+    success: boolean;
+    text?: string;
+    method?: string;
+    error?: string;
+    metadata?: {
+      image_size?: [number, number];
+      image_mode?: string;
+      image_format?: string;
+      detected_blocks?: number;
+      confidence_scores?: number[];
+    };
+  }
+  
+  export interface ParsedImageDocument {
+    content: string;
+    metadata: {
+      filename: string;
+      original_filename: string;
+      file_size: number;
+      image_size?: [number, number];
+      ocr_method: string;
+      confidence_score?: number;
+      processing_date: string;
+    };
+  }
+  
+  export function extractTextFromImage(imagePath: string): Promise<OCRResult>;
+  export function parseImageDocument(imagePath: string, originalFilename: string): Promise<ParsedImageDocument | null>;
+  export function isSupportedImageFormat(filename: string): boolean;
+  export function getSupportedImageFormats(): string[];
+  export function saveOCRResultToFile(parsedDocument: ParsedImageDocument, outputDir: string): string;
+}
+
+declare module '../utils/documentDownload' {
+  export interface DocumentInfo {
+    id: number;
+    filename: string;
+    original_name: string;
+    type: string;
+    uploaded_at: Date;
+    category?: string;
+  }
+  
+  export function getDocumentById(documentId: number): Promise<DocumentInfo | null>;
+  export function getDocumentByOriginalName(originalName: string): Promise<DocumentInfo | null>;
+  export function documentFileExists(documentInfo: DocumentInfo): boolean;
+  export function getDocumentFileSize(documentInfo: DocumentInfo): number;
+  export function formatFileSize(bytes: number): string;
+  export function getMimeType(filename: string): string;
+  export function createDownloadableCopy(documentInfo: DocumentInfo): string | null;
+  export function cleanupTempFiles(): void;
 } 

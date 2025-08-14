@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { parseImageDocument, isSupportedImageFormat, getSupportedImageFormats } from "./ocrParser";
 
 export interface ParsedDocument {
   content: string;
@@ -166,6 +167,27 @@ export async function parseDocument(filePath: string): Promise<ParsedDocument> {
         }
       };
     
+    // Обработка изображений через OCR
+    case '.jpg':
+    case '.jpeg':
+    case '.png':
+    case '.bmp':
+    case '.tiff':
+    case '.tif':
+    case '.webp':
+      const imageDocument = await parseImageDocument(filePath, path.basename(filePath));
+      if (!imageDocument) {
+        throw new Error(`Не удалось обработать изображение: ${path.basename(filePath)}`);
+      }
+      return {
+        content: imageDocument.content,
+        metadata: {
+          title: imageDocument.metadata.original_filename,
+          created: new Date(imageDocument.metadata.processing_date),
+          modified: new Date(imageDocument.metadata.processing_date)
+        }
+      };
+    
     default:
       throw new Error(`Неподдерживаемый формат файла: ${ext}`);
   }
@@ -184,7 +206,14 @@ export function getSupportedFormats(): string[] {
     '.docx',   // Word документы (новый)
     '.doc',    // Word документы (старый формат)
     '.pptx',   // PowerPoint презентации (новый)
-    '.ppt'     // PowerPoint презентации (старый формат)
+    '.ppt',    // PowerPoint презентации (старый формат)
+    '.jpg',    // JPEG изображения
+    '.jpeg',   // JPEG изображения
+    '.png',    // PNG изображения
+    '.bmp',    // BMP изображения
+    '.tiff',   // TIFF изображения
+    '.tif',    // TIFF изображения
+    '.webp'    // WebP изображения
   ];
 }
 
@@ -194,4 +223,11 @@ export function getSupportedFormats(): string[] {
 export function isSupportedFormat(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   return getSupportedFormats().includes(ext);
+}
+
+/**
+ * Проверяет, является ли файл изображением
+ */
+export function isImageFile(filePath: string): boolean {
+  return isSupportedImageFormat(filePath);
 } 
