@@ -35,6 +35,7 @@
     "test:ocr-integration": "ts-node src/utils/testOCRIntegration.ts",
     "test:download": "ts-node src/utils/testDocumentDownload.ts",
     "test:download-index": "ts-node src/utils/testDownloadWithIndex.ts",
+    "test:new-access": "ts-node src/utils/testNewAccessSystem.ts",
     "install:python-deps": "pip3 install -r requirements.txt",
     "test:new-features": "ts-node src/utils/testNewFeatures.ts"
   },

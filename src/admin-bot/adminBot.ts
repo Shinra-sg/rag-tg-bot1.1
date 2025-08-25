@@ -11,7 +11,11 @@ import {
   getDocumentAccessList, 
   getAccessStatistics,
   getUserAccessibleDocuments,
-  getUserInaccessibleDocuments
+  getUserInaccessibleDocuments,
+  grantAccessToAllDocuments,
+  revokeAccessFromAllDocuments,
+  getAllUsersWithAccess,
+  getAllUsersWithoutAccess
 } from "../utils/documentAccess";
 
 const token = process.env.ADMIN_BOT_TOKEN;
@@ -185,7 +189,8 @@ export function startAdminBot() {
 
   const ACCESS_MENU = Markup.keyboard([
     ["Предоставить доступ", "Отозвать доступ", "Список доступа"],
-    ["Статистика доступа", "Назад в главное меню"]
+    ["Доступ ко всем документам", "Отозвать весь доступ", "Пользователи с доступом"],
+    ["Пользователи без доступа", "Статистика доступа", "Назад в главное меню"]
   ]).resize();
 
   bot.start(async (ctx: Context) => {
@@ -360,6 +365,92 @@ export function startAdminBot() {
     } catch (e) {
       console.error("Ошибка при получении статистики:", e);
       await ctx.reply("Ошибка при получении статистики.", ACCESS_MENU);
+    }
+  });
+
+  bot.hears("Доступ ко всем документам", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    accessStates.set(ctx.from!.id, { step: "granting_all_access" });
+    await ctx.reply(
+      "🔓 Предоставление доступа ко всем документам\n\n" +
+      "Введите username пользователя (например: @username или username):\n\n" +
+      "⚠️ Внимание: Это действие предоставит доступ ко ВСЕМ документам в системе!",
+      Markup.keyboard([["Отмена"]]).oneTime().resize()
+    );
+  });
+
+  bot.hears("Отозвать весь доступ", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    accessStates.set(ctx.from!.id, { step: "revoking_all_access" });
+    await ctx.reply(
+      "🔒 Отзыв доступа ко всем документам\n\n" +
+      "Введите username пользователя (например: @username или username):\n\n" +
+      "⚠️ Внимание: Это действие отзовет доступ ко ВСЕМ документам!",
+      Markup.keyboard([["Отмена"]]).oneTime().resize()
+    );
+  });
+
+  bot.hears("Пользователи с доступом", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    try {
+      const usersResult = await getAllUsersWithAccess();
+      if (usersResult.success) {
+        if (usersResult.users.length === 0) {
+          await ctx.reply("👥 Пользователи с доступом к документам:\n\n" +
+            "Список пуст. Никто не имеет доступа к документам.", ACCESS_MENU);
+          return;
+        }
+
+        const userList = usersResult.users.map((user, i) => 
+          `#${i+1} @${user.username}\n` +
+          `   📄 Доступ к документам: ${user.document_count}\n` +
+          `   📅 Последний доступ: ${new Date(user.last_granted).toLocaleString()}`
+        ).join("\n\n");
+
+        await ctx.reply(
+          `👥 Пользователи с доступом к документам:\n\n${userList}`,
+          ACCESS_MENU
+        );
+      } else {
+        await ctx.reply("Ошибка при получении списка пользователей.", ACCESS_MENU);
+      }
+    } catch (e) {
+      console.error("Ошибка при получении списка пользователей:", e);
+      await ctx.reply("Ошибка при получении списка пользователей.", ACCESS_MENU);
+    }
+  });
+
+  bot.hears("Пользователи без доступа", async (ctx: Context) => {
+    if (!(await isAdminFromDB(ctx))) return;
+    
+    try {
+      const usersResult = await getAllUsersWithoutAccess();
+      if (usersResult.success) {
+        if (usersResult.users.length === 0) {
+          await ctx.reply("👥 Пользователи без доступа к документам:\n\n" +
+            "Список пуст. Все пользователи имеют доступ или не было поисков.", ACCESS_MENU);
+          return;
+        }
+
+        const userList = usersResult.users.map((user, i) => 
+          `#${i+1} @${user.username}\n` +
+          `   🔍 Поисков: ${user.search_count}\n` +
+          `   📅 Последний поиск: ${new Date(user.last_search).toLocaleString()}`
+        ).join("\n\n");
+
+        await ctx.reply(
+          `👥 Пользователи без доступа к документам:\n\n${userList}`,
+          ACCESS_MENU
+        );
+      } else {
+        await ctx.reply("Ошибка при получении списка пользователей.", ACCESS_MENU);
+      }
+    } catch (e) {
+      console.error("Ошибка при получении списка пользователей:", e);
+      await ctx.reply("Ошибка при получении списка пользователей.", ACCESS_MENU);
     }
   });
 
@@ -1138,6 +1229,54 @@ export function startAdminBot() {
           `📋 Список пользователей с доступом к документу '${doc.original_name || doc.filename}':\n\n${list}`,
           ACCESS_MENU
         );
+        accessStates.delete(ctx.from!.id);
+        return;
+      }
+
+      // Массовое предоставление доступа ко всем документам
+      if (accessState.step === "granting_all_access") {
+        if (text === "Отмена") {
+          accessStates.delete(ctx.from!.id);
+          await ctx.reply("Действие отменено.", ACCESS_MENU);
+          return;
+        }
+        
+        const username = text;
+        const result = await grantAccessToAllDocuments(username, ctx.from!.id);
+        if (result.success) {
+          await ctx.reply(
+            `✅ ${result.message}\n\n` +
+            `📊 Предоставлено доступов: ${result.grantedCount}`,
+            ACCESS_MENU
+          );
+          await logAdminAction(ctx, "grant_all_access", "user", null, null, `username: ${username}, documents: ${result.grantedCount}`);
+        } else {
+          await ctx.reply(`❌ ${result.message}`, ACCESS_MENU);
+        }
+        accessStates.delete(ctx.from!.id);
+        return;
+      }
+
+      // Массовый отзыв доступа ко всем документам
+      if (accessState.step === "revoking_all_access") {
+        if (text === "Отмена") {
+          accessStates.delete(ctx.from!.id);
+          await ctx.reply("Действие отменено.", ACCESS_MENU);
+          return;
+        }
+        
+        const username = text;
+        const result = await revokeAccessFromAllDocuments(username);
+        if (result.success) {
+          await ctx.reply(
+            `✅ ${result.message}\n\n` +
+            `📊 Отозвано доступов: ${result.revokedCount}`,
+            ACCESS_MENU
+          );
+          await logAdminAction(ctx, "revoke_all_access", "user", null, null, `username: ${username}, documents: ${result.revokedCount}`);
+        } else {
+          await ctx.reply(`❌ ${result.message}`, ACCESS_MENU);
+        }
         accessStates.delete(ctx.from!.id);
         return;
       }

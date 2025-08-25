@@ -9,8 +9,7 @@ for launch tg-bot {npm run start:bot}
 
 test for DB {npx ts-node src/utils/testDb.ts}
 
-for launch embedding {python3 generate_embeddings.py}
-
+for launch embedding {python3 generate_embeddings}
 launch all {npm run start:all}
 
 !launch all with cleanup {npm run start:all:clean}!
@@ -96,3 +95,9 @@ dashboard {http://localhost:3001}
 
 
 деплой:
+
+
+
+
+по архитектуре rag
+продумать переход на другой интерфейс

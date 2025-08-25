@@ -209,4 +209,139 @@ export async function getAccessStatistics(): Promise<{ success: boolean; stats: 
     console.error("Ошибка при получении статистики:", error);
     return { success: false, stats: {}, message: "Ошибка при получении статистики" };
   }
+}
+
+// Функция для массового предоставления доступа ко всем документам
+export async function grantAccessToAllDocuments(
+  username: string, 
+  grantedByAdminId: number
+): Promise<{ success: boolean; message: string; grantedCount: number }> {
+  try {
+    // Проверяем, что админ существует
+    const adminCheck = await pool.query("SELECT id FROM admins WHERE user_id = $1", [grantedByAdminId]);
+    if (adminCheck.rows.length === 0) {
+      return { success: false, message: "Администратор не найден", grantedCount: 0 };
+    }
+    const adminId = adminCheck.rows[0].id;
+
+    // Очищаем username от @ если есть
+    const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
+    if (!cleanUsername) {
+      return { success: false, message: "Username не может быть пустым", grantedCount: 0 };
+    }
+
+    // Получаем все документы
+    const docsResult = await pool.query("SELECT id FROM documents");
+    if (docsResult.rows.length === 0) {
+      return { success: false, message: "Нет документов в базе данных", grantedCount: 0 };
+    }
+
+    let grantedCount = 0;
+    for (const doc of docsResult.rows) {
+      // Проверяем, не предоставлен ли уже доступ
+      const existingAccess = await pool.query(
+        "SELECT id FROM document_access WHERE document_id = $1 AND username = $2",
+        [doc.id, cleanUsername]
+      );
+
+      if (existingAccess.rows.length > 0) {
+        // Если доступ уже есть, активируем его
+        await pool.query(
+          "UPDATE document_access SET is_active = TRUE, granted_by = $1, granted_at = CURRENT_TIMESTAMP WHERE document_id = $2 AND username = $3",
+          [adminId, doc.id, cleanUsername]
+        );
+      } else {
+        // Предоставляем новый доступ
+        await pool.query(
+          "INSERT INTO document_access (document_id, username, granted_by) VALUES ($1, $2, $3)",
+          [doc.id, cleanUsername, adminId]
+        );
+      }
+      grantedCount++;
+    }
+
+    return { 
+      success: true, 
+      message: `Доступ ко всем документам (${grantedCount}) предоставлен для @${cleanUsername}`, 
+      grantedCount 
+    };
+  } catch (error) {
+    console.error("Ошибка при массовом предоставлении доступа:", error);
+    return { success: false, message: "Ошибка при массовом предоставлении доступа", grantedCount: 0 };
+  }
+}
+
+// Функция для массового отзыва доступа ко всем документам
+export async function revokeAccessFromAllDocuments(
+  username: string
+): Promise<{ success: boolean; message: string; revokedCount: number }> {
+  try {
+    const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
+    if (!cleanUsername) {
+      return { success: false, message: "Username не может быть пустым", revokedCount: 0 };
+    }
+
+    const result = await pool.query(
+      "UPDATE document_access SET is_active = FALSE WHERE username = $1 RETURNING id",
+      [cleanUsername]
+    );
+
+    return { 
+      success: true, 
+      message: `Доступ ко всем документам отозван для @${cleanUsername}`, 
+      revokedCount: result.rows.length 
+    };
+  } catch (error) {
+    console.error("Ошибка при массовом отзыве доступа:", error);
+    return { success: false, message: "Ошибка при массовом отзыве доступа", revokedCount: 0 };
+  }
+}
+
+// Функция для получения списка всех пользователей с доступом
+export async function getAllUsersWithAccess(): Promise<{ success: boolean; users: any[]; message?: string }> {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT username, 
+             COUNT(*) as document_count,
+             MAX(granted_at) as last_granted
+      FROM document_access 
+      WHERE is_active = TRUE 
+      GROUP BY username 
+      ORDER BY last_granted DESC
+    `);
+
+    return { success: true, users: result.rows };
+  } catch (error) {
+    console.error("Ошибка при получении списка пользователей:", error);
+    return { success: false, users: [], message: "Ошибка при получении списка пользователей" };
+  }
+}
+
+// Функция для получения списка всех пользователей БЕЗ доступа
+export async function getAllUsersWithoutAccess(): Promise<{ success: boolean; users: any[]; message?: string }> {
+  try {
+    // Получаем всех пользователей, которые когда-либо получали доступ
+    const usersWithAccess = await pool.query(`
+      SELECT DISTINCT username FROM document_access
+    `);
+    
+    const usernamesWithAccess = usersWithAccess.rows.map(row => row.username);
+    
+    // Получаем всех пользователей из search_logs, у которых нет доступа
+    const result = await pool.query(`
+      SELECT DISTINCT username, 
+             COUNT(*) as search_count,
+             MAX(created_at) as last_search
+      FROM search_logs 
+      WHERE username IS NOT NULL 
+      AND username NOT IN (${usernamesWithAccess.length > 0 ? usernamesWithAccess.map((_, i) => `$${i + 1}`).join(',') : 'NULL'})
+      GROUP BY username 
+      ORDER BY last_search DESC
+    `, usernamesWithAccess.length > 0 ? usernamesWithAccess : []);
+
+    return { success: true, users: result.rows };
+  } catch (error) {
+    console.error("Ошибка при получении списка пользователей без доступа:", error);
+    return { success: false, users: [], message: "Ошибка при получении списка пользователей без доступа" };
+  }
 } 

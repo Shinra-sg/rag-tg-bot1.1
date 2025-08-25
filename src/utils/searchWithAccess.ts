@@ -147,6 +147,8 @@ export async function getAvailableDocuments(username: string) {
  */
 export async function hasAnyAccess(username: string): Promise<boolean> {
   try {
+    // По умолчанию все документы закрыты для всех пользователей
+    // Доступ предоставляется только через таблицу document_access
     const res = await pool.query(`
       SELECT 1 FROM document_access 
       WHERE username = $1 AND is_active = TRUE 
@@ -156,6 +158,6 @@ export async function hasAnyAccess(username: string): Promise<boolean> {
     return res.rows.length > 0;
   } catch (error) {
     console.error("Ошибка при проверке доступа:", error);
-    return false;
+    return false; // По умолчанию доступ запрещен
   }
 } 
